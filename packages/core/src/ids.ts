@@ -27,3 +27,7 @@ export type SavedItemId = typeof SavedItemId.Type
 /** Identifies a question within one `ask_user` call. Chosen by the model; answers echo it back. */
 export const QuestionId = Schema.NonEmptyString.pipe(Schema.brand("QuestionId"))
 export type QuestionId = typeof QuestionId.Type
+
+/** Names one undoable close in the worker's session storage, so undo survives a worker restart. */
+export const UndoToken = Schema.NonEmptyString.pipe(Schema.brand("UndoToken"))
+export type UndoToken = typeof UndoToken.Type

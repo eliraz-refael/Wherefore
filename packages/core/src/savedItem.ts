@@ -131,11 +131,12 @@ export const reopen = (item: SavedItem): SavedItem => {
   return { ...rest, status: "open" }
 }
 
-/** A removed item and where it was, so `restoreItem` can put it back. */
-export interface RemovedItem {
-  readonly item: SavedItem
-  readonly index: number
-}
+/** A removed item and where it was, so `restoreItem` can put it back. A schema, so it can cross to the worker. */
+export const RemovedItem = Schema.Struct({
+  item: SavedItem,
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+})
+export type RemovedItem = typeof RemovedItem.Type
 
 /** Deletes an item from the list. `None` when no item has that id. */
 export const removeItem = (
