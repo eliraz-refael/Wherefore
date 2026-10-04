@@ -4,3 +4,8 @@ node_modules
 *.zip
 companion/dist
 .claude/task-state/
+
+# Locally installed agent skills (third-party, not part of the project)
+.agents/
+.claude/skills/
+skills-lock.json
