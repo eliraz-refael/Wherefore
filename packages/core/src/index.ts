@@ -6,5 +6,7 @@ export const packageName = "@wherefore/core" as const
 
 export * from "./ids.ts"
 export * from "./intention.ts"
+export * from "./matcher.ts"
 export * from "./savedItem.ts"
 export * from "./tab.ts"
+export * from "./url.ts"
