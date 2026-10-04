@@ -94,6 +94,7 @@ The proof of concept stays as the reference until the rewrite reaches parity, th
 pnpm install
 pnpm typecheck:packages   # rewrite packages
 pnpm test:packages
+pnpm -C packages/extension build   # rewrite extension (see packages/extension/README.md)
 pnpm typecheck            # proof of concept
 ```
 

@@ -5,7 +5,8 @@
  * `effect/<module>` (e.g. `effect/ai`). When the pin moves, only this file changes.
  * Each re-export is consumed only behind one of our own services (architecture A1):
  * - ai + http: the API-mode agent (`ModelClient`), running in the page.
- * - reactivity: the UI store (Atom, bound to React via @effect/atom-react in M1).
+ * - reactivity: the UI store (Atom, bound to React via @effect/atom-react). @effect/atom-react
+ *   itself imports `effect/unstable/reactivity`, so the 4.0.0 move also needs its matching version.
  */
 export { AiError, Chat, LanguageModel, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai"
 export { FetchHttpClient, HttpClient } from "effect/unstable/http"
