@@ -7,7 +7,7 @@ describe("core smoke", () => {
   it.effect("runs an Effect and decodes with Schema", () =>
     Effect.gen(function*() {
       const decoded = yield* Schema.decodeUnknownEffect(Schema.String)(packageName)
-      expect(decoded).toBe("@tab-intentions/core")
+      expect(decoded).toBe("@wherefore/core")
     }))
 
   it("resolves the effect/unstable/ai seam", () => {

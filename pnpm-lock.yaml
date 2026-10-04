@@ -24,7 +24,7 @@ importers:
 
   packages/companion:
     dependencies:
-      '@tab-intentions/core':
+      '@wherefore/core':
         specifier: workspace:*
         version: link:../core
       effect:
@@ -68,7 +68,7 @@ importers:
 
   packages/extension:
     dependencies:
-      '@tab-intentions/core':
+      '@wherefore/core':
         specifier: workspace:*
         version: link:../core
       effect:

@@ -4,10 +4,10 @@ import { corePackageName, packageName } from "../src/index.ts"
 import { Atom, AtomRegistry, Chat, FetchHttpClient, LanguageModel } from "../src/unstable.ts"
 
 describe("extension smoke", () => {
-  it.effect("links @tab-intentions/core through the workspace", () =>
+  it.effect("links @wherefore/core through the workspace", () =>
     Effect.sync(() => {
-      expect(corePackageName).toBe("@tab-intentions/core")
-      expect(packageName).toBe("@tab-intentions/extension")
+      expect(corePackageName).toBe("@wherefore/core")
+      expect(packageName).toBe("@wherefore/extension")
     }))
 
   it("resolves the effect/unstable/{ai,http,reactivity} seams", () => {

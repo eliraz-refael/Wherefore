@@ -1,5 +1,5 @@
 {
-  "name": "@tab-intentions/extension",
+  "name": "@wherefore/extension",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tab-intentions/core": "workspace:*",
+    "@wherefore/core": "workspace:*",
     "effect": "4.0.0-rc.117"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 /**
- * The only file in @tab-intentions/companion that imports from `effect/unstable/*`.
+ * The only file in @wherefore/companion that imports from `effect/unstable/*`.
  *
  * rc.117 serves these under `effect/unstable/<module>`; Effect 4.0.0 moves them to
  * `effect/<module>` (e.g. `effect/cli`). When the pin moves, only this file changes.
