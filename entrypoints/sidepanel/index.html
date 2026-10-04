@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tab Intentions</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Tab Intentions</h1>
+      <nav id="views" aria-label="Views">
+        <button type="button" data-view="analyze" aria-pressed="true">Analyze</button>
+        <button type="button" data-view="saved" aria-pressed="false">Saved <span id="savedCount"></span></button>
+      </nav>
+
+      <div id="setup">
+        <fieldset id="modes">
+          <legend class="sr-only">How to connect a model</legend>
+          <label><input type="radio" name="mode" value="api" /> API key</label>
+          <label><input type="radio" name="mode" value="mcp" /> MCP</label>
+          <label><input type="radio" name="mode" value="acp" /> ACP agent</label>
+        </fieldset>
+
+        <div class="pane" data-mode="api">
+          <details id="apiSettings">
+            <summary>API settings</summary>
+            <label>Anthropic API key <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" /></label>
+            <label>Model <input id="model" type="text" /></label>
+            <button id="saveApi" type="button">Save</button>
+          </details>
+        </div>
+
+        <div class="pane" data-mode="mcp">
+          <p><span id="bridgeStatus" class="pill">Not connected</span> <button id="rescan" type="button">Reconnect</button></p>
+          <ol class="muted steps">
+            <li>In the repo, run <code>node companion/dist/cli.js install</code></li>
+            <li>Add the MCP server it prints to Claude Code (or any MCP client)</li>
+            <li>Ask your agent to “organize my tabs”. Questions and results show up here.</li>
+          </ol>
+        </div>
+
+        <div class="pane" data-mode="acp">
+          <div id="agentSettings"></div>
+          <details id="acpSettings">
+            <summary>Agent settings</summary>
+            <label>Agent command <input id="acpCommand" type="text" /></label>
+            <p class="muted">Any ACP agent works. The default runs Claude Code with your existing login. Requires <code>node companion/dist/cli.js install</code> once.</p>
+            <button id="saveAcp" type="button">Save</button>
+          </details>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="analyzeView">
+        <section id="controls">
+          <button id="analyze" type="button" class="primary">Analyze my tabs</button>
+          <button id="stop" type="button" hidden>Stop</button>
+          <button id="export" type="button" hidden>Export JSON</button>
+        </section>
+
+        <p id="status" role="status"></p>
+        <p id="usage" class="muted"></p>
+
+        <section id="questions" hidden></section>
+
+        <form id="reply" hidden>
+          <label for="replyText" class="sr-only">Reply to the agent</label>
+          <input id="replyText" type="text" placeholder="Reply to the agent" autocomplete="off" />
+          <button type="submit">Send</button>
+        </form>
+
+        <section id="results"></section>
+
+        <details id="logWrap">
+          <summary>Agent log</summary>
+          <ol id="log"></ol>
+        </details>
+      </div>
+
+      <section id="savedView" aria-label="Saved" hidden>
+        <div class="row"><button id="exportMd" type="button">Export Markdown</button></div>
+        <div id="savedList"></div>
+      </section>
+    </main>
+
+    <div id="toast" role="status"></div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

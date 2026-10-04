@@ -1,0 +1,25 @@
+{
+  "name": "tab-intentions-companion",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "tab-intentions": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --banner:js=\"#!/usr/bin/env node\nimport { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
