@@ -1,4 +1,4 @@
-# Tab Intentions: product architecture (draft 0, 2026-10-04)
+# Wherefore: product architecture (draft 0, 2026-10-04)
 
 Builds on [story.md](story.md) and [../research/effect-v4.md](../research/effect-v4.md). The POC (this repo's current code) stays as the reference until the product reaches parity.
 
@@ -8,7 +8,8 @@ Builds on [story.md](story.md) and [../research/effect-v4.md](../research/effect
 packages/
   core/        Pure domain. No browser, no Node.
                Schemas (Intention, Item, Run, Tab), the Toolkit (5 tools), the prompt,
-               URL normalization + matching, Markdown export. Effect + Schema only.
+               URL normalization + matching, Markdown export. Effect + Schema, plus
+               Tool/Toolkit from effect/unstable/ai (imported only via src/unstable.ts).
   extension/   WXT, MV3.
                background: TabTools, Store, Broker client (thin; never runs a model)
                ui: side panel + full page (React 19 + Atom), shared components
@@ -52,10 +53,12 @@ Today every MCP server listens on a localhost port and the service worker probes
 - **No sync service, no server.** Nothing leaves the machine except calls to the model the user chose.
 
 ### A6. Incremental triage
-Before calling the model, `core` matches open tabs to open items by normalized URL (dropping fragments and tracking parameters; secret parameters are already redacted for the model). The model only sees unmatched tabs, plus a compact list of open items (id, task, domains), so `submit_intentions` can attach a new tab to an existing item instead of creating a duplicate.
+Before calling the model, `core` matches open tabs to open items by normalized URL. Normalization drops tracking parameters and in-page anchors (`#install`), but keeps fragments that look like client-side routes (`#/projects/42`, `#!…`, Gmail's `#inbox/<id>`); otherwise every Gmail thread would match a saved one. Matching compares real URLs: secret parameters are redacted only in what the model sees, because a param like `key=` can identify a document and a false match would close a tab under the wrong item. The model only sees unmatched tabs, plus a compact list of open items (id, task, domains), so `submit_intentions` can attach a new tab to an existing item instead of creating a duplicate.
 
 ### A7. UI: React 19 + Atom
-Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid and Vue at the same version as `effect` (all at 4.0.0-rc.117). `@effect/atom-react` is the one the Effect team builds and documents first, and React has the widest component ecosystem. The side panel and the full page share components; styles come from the design tokens on the canvas. Accessibility rules from the POC review carry over: native controls, labelled inputs, focus kept on in-place updates, a live region for status.
+Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid and Vue at the same version as `effect` (all at 4.0.0-rc.117). `@effect/atom-react` is the one the Effect team builds and documents first, and React has the widest component ecosystem. The side panel and the full page share components; styles come from the design tokens on the canvas.
+
+**UX direction (canvas v6):** *Your list* is the home screen. Triage is one *Tidy up* screen with smart defaults and a sticky "Save N and close M" bar. Questions come one at a time and are answered with a tap. Builder details (model, cost, MCP, export) live in Settings. The UI shows no confidence, evidence, filters or step log, and never says "intention". Done stays a labelled button. Accessibility rules from the POC review carry over: native controls, labelled inputs, focus kept on in-place updates, a live region for status.
 
 ### A8. Testing
 `@effect/vitest` for `core` and services, with `TestClock` and layer mocks for chrome APIs. Companion: the existing no-Chrome smoke tests, ported. Extension end-to-end: Playwright with the unpacked build loaded (from M3).

@@ -1,4 +1,4 @@
-# Tab Intentions: the main story (draft 0, 2026-10-04)
+# Wherefore: the main story (draft 0, 2026-10-04)
 
 ## The problem
 
@@ -19,11 +19,11 @@ Bookmarks, tab managers and "close all" don't help, because they save tabs and d
 
 > Dana has 140 tabs in 6 windows. Chrome is slow, and she can't find the PR she was reviewing.
 >
-> She opens Tab Intentions and clicks **Tidy up**. Within a minute the first intentions stream in: *"Finish reviewing the auth PR"* (4 tabs), *"Decide between two standing desks"* (9 tabs), *"Follow the Vite 8 release"* (2 tabs). It already knows 31 tabs are safe to close: merged PRs, finished orders, login pages, duplicates. It asks her two short questions about tabs it couldn't place, with clickable answers.
+> She opens Wherefore and clicks **Tidy up**. Within a minute the first intentions stream in: *"Finish reviewing the auth PR"* (4 tabs), *"Decide between two standing desks"* (9 tabs), *"Follow the Vite 8 release"* (2 tabs). It already knows 31 tabs are safe to close: merged PRs, finished orders, login pages, duplicates. It asks her two short questions about tabs it couldn't place, with clickable answers.
 >
-> She skims the cards, fixes one task's wording, and clicks **Save & close all**. 127 tabs close. Her to-dos are in a list, each with its tabs tucked inside.
+> She skims the cards, fixes one task's wording, and clicks **Save 9 and close 127**. 127 tabs close. Her to-dos are in her list, each with its tabs tucked inside.
 >
-> Next morning she opens **Saved**, clicks *"Finish reviewing the auth PR"*, and its 4 tabs come back as a tab group. She finishes, marks it done, and the group closes.
+> Next morning she opens **Your list**, clicks *"Finish reviewing the auth PR"*, and its 4 tabs come back as a tab group. She finishes, clicks **Done**, the group closes, and the item moves to her Done archive.
 >
 > A week later she has 60 tabs again. This time Tidy up takes 20 seconds. It recognizes the 15 tabs that belong to things she already saved and only thinks about the new ones.
 
@@ -32,7 +32,7 @@ Bookmarks, tab managers and "close all" don't help, because they save tabs and d
 1. **Triage**: turn open tabs into intentions (grouped, explained, confidence-rated; asks only when unsure).
 2. **Capture**: save each intention as an item: *To do*, *Follow up*, *Read* or *Keep*, with a one-line task.
 3. **Close**: close everything that's captured, finished or dead, with undo.
-4. **Resume**: reopen an item's tabs as a group; mark it done or drop it.
+4. **Resume**: reopen an item's tabs as a group; mark it **Done** (its tabs close and it moves to the Done archive) or **Remove** it (deleted, with undo).
 5. **Repeat, incrementally**: new tabs are matched to existing items first; only the rest needs the model.
 
 ## Principles
@@ -49,9 +49,9 @@ Bookmarks, tab managers and "close all" don't help, because they save tabs and d
 1. **Install in two minutes** for a co-worker, with an onboarding that picks the model hookup for them.
 2. **Tidy up**: triage with streamed results, questions, and per-intention review.
 3. **Save / close / undo**: per card and in bulk.
-4. **Saved list**: grouped by type; resume as a tab group, done, drop, search, export.
+4. **Your list** (the home screen): grouped by type; resume as a tab group, Done, Remove, search, export; a Done archive keeps finished items and their tabs.
 5. **Incremental triage**: tabs that match saved items are recognized without the model; only new tabs are analyzed.
-6. **Trust signals**: confidence, evidence and "already done" on every card; privacy explained in-product.
+6. **Trust signals**: "already done" called out on the card; privacy explained in-product. Confidence and evidence drive when the model reads a page or asks, but stay out of the UI.
 
 ## Not in v1
 
@@ -78,5 +78,5 @@ Reminders and dates · syncing across devices · external to-do apps (Linear, To
 | --- | --- | --- |
 | v1 audience and distribution | Co-workers, via an **unlisted** Chrome Web Store listing | Real installs and auto-updates without a public launch; store review keeps permissions and privacy honest |
 | Model hookup | **Onboarding picks**: Claude Code login via ACP when available (needs the companion), otherwise the user's API key; MCP stays a power-user option | Most co-workers have Claude Code (no key needed); everyone else is one paste away |
-| Surface | **Side panel + full page**: the side panel for quick triage and resume, a full page for reviewing big runs and managing Saved | Reviewing 100+ tabs needs room; resuming wants to sit next to the tabs |
+| Surface | **Side panel + full page**: the side panel for quick triage and resume, a full page for reviewing big runs and managing Your list | Reviewing 100+ tabs needs room; resuming wants to sit next to the tabs |
 | Triage | **On demand + incremental**: Tidy up when the user asks; tabs matching saved items are recognized without the model; a badge counts untracked tabs | Fast, cheap repeat runs without watching browsing in the background |

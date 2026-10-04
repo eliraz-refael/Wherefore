@@ -125,7 +125,7 @@ Researched 2026-10-04. Source code was read from `Effect-TS/effect` `main` at co
 - `effect/ai/McpServer` (unstable) ships a server with `layerStdio`, `layerHttp` and a generic `layer` ([MCP.md](https://github.com/Effect-TS/effect/blob/main/packages/effect/MCP.md); `ai/McpServer.ts`).
 - **Tools are the same `Tool`/`Toolkit` objects used for LLM calls**, exposed with `McpServer.toolkit(MyToolkit)` plus `MyToolkit.toLayer(handlers)`. Resources (including URI templates) and prompts with completions are also supported, and elicitation is handled in the source.
 - **Stdio transport:** `McpServer.layerStdio({ name, version, protocols: [McpProtocol.v2025_06_18] })` together with `NodeStdio.layer`. Logs must go to stderr.
-- Supported protocol revisions are **2024-11-05, 2025-03-26 and 2025-06-18**. The legacy two-endpoint HTTP+SSE transport is not supported ([MCP.md](https://github.com/Effect-TS/effect/blob/main/packages/effect/MCP.md)). There is a conformance test suite under `packages/effect/test/ai/McpServer/McpConformance`.
+- Supported protocol revisions are **2024-11-05, 2025-03-26 and 2025-06-18** per MCP.md. Correction (checked in rc.117's `McpProtocol`): it also exports `v2025_11_25` and `v2026_07_28` (the latter stateless). The legacy two-endpoint HTTP+SSE transport is not supported ([MCP.md](https://github.com/Effect-TS/effect/blob/main/packages/effect/MCP.md)). There is a conformance test suite under `packages/effect/test/ai/McpServer/McpConformance`.
 - I found **no MCP client** in the repo.
 
 ## 7. UI and reactivity (Atom)
@@ -148,7 +148,6 @@ Researched 2026-10-04. Source code was read from `Effect-TS/effect` `main` at co
 - **Bundle cost of the modules we would use.** There are no official numbers for `effect/ai`, `@effect/ai-anthropic`, `effect/rpc` or `effect/reactivity`. We need to measure with our WXT build.
 - **MV3 service worker behavior.** There is no official guidance on fiber/scope lifetime when the service worker is killed, or on `ManagedRuntime` per SW wake. This needs a prototype.
 - **Anthropic from the extension.** I did not verify whether the request needs `anthropic-dangerous-direct-browser-access` under extension host permissions; this is an Anthropic/Chrome question, not an Effect one. I also did not verify whether `@effect/ai-anthropic` supports all the beta features we use, such as prompt caching.
-- **MCP 2025-11-25 support.** It is not listed; only the revisions up to 2025-06-18 are named.
 - **Effect output in the MCP TS SDK.** I did not check whether `@modelcontextprotocol/sdk` accepts Standard Schema / Effect Schema directly; the alternative is passing the converted JSON Schema.
 - **Docs coverage.** The v4 docs navigation at effect.website shows no AI, MCP, Atom, CLI or RPC sections. The in-repo `ai-docs/`, `MCP.md` and JSDoc are currently the main references.
 
