@@ -34,6 +34,8 @@ jobs:
           pnpm -C companion install --frozen-lockfile
 
       # Product rewrite (packages/*)
+      - name: Check unstable Effect imports
+        run: pnpm check:imports
       - name: Typecheck packages
         run: pnpm typecheck:packages
       - name: Test packages
