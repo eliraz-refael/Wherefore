@@ -7,11 +7,13 @@ Builds on [story.md](story.md) and [../research/effect-v4.md](../research/effect
 ```
 packages/
   core/        Pure domain. No browser, no Node.
-               Schemas (Intention, Item, Run, Tab), the Toolkit (5 tools), the prompt,
-               URL normalization + matching, Markdown export. Effect + Schema, plus
-               Tool/Toolkit from effect/unstable/ai (imported only via src/unstable.ts).
+               Schemas (Intention, Item, Run, Tab, Settings), the Toolkit (5 tools), the
+               worker's RPC group (WorkerRpcs), the prompt, URL normalization + matching,
+               Markdown export. Effect + Schema, plus Tool/Toolkit and Rpc/RpcGroup from
+               effect/unstable/* (imported only via src/unstable.ts).
   extension/   WXT, MV3.
-               background: TabTools, Store, Broker client (thin; never runs a model)
+               background: TabTools, Store, RPC server for pages, Broker client
+               (thin; never runs a model)
                ui: side panel + full page (React 19 + Atom), shared components
                api-mode agent (effect/ai + @effect/ai-anthropic), runs in the page
   companion/   Node CLI (effect/cli).
@@ -26,7 +28,7 @@ One pnpm workspace; `core` is imported by both other packages, so tool schemas, 
 
 ### A1. Effect v4, used in two tiers
 - **Commit everywhere:** `Effect`, `Schema`, `Context.Service`/`Layer`, `Stream`, `Scope`. Stable core API.
-- **Adopt behind our own seams:** `effect/ai` + `@effect/ai-anthropic`, `McpServer`, `effect/rpc`, `effect/process`, `effect/cli` and `effect/reactivity` are all marked unstable. Each sits behind one service of ours (`ModelClient`, `McpSurface`, `BrokerRpc`, `AgentProcess`, the UI store), so a breaking minor release changes one file. Exact version pins; upgrades are deliberate.
+- **Adopt behind our own seams:** `effect/ai` + `@effect/ai-anthropic`, `McpServer`, `effect/rpc`, `effect/process`, `effect/cli` and `effect/reactivity` are all marked unstable. Each sits behind one service of ours (`ModelClient`, `McpSurface`, `BrokerRpc`, `WorkerClient` and the worker's RPC server, `AgentProcess`, the UI store), so a breaking minor release changes one file. RPC group definitions (`Rpc`/`RpcGroup`) live in `core` with the schemas they reuse. Exact version pins; upgrades are deliberate.
 - **Keep ours:** ACP protocol (`@agentclientprotocol/sdk`, wrapped in a service), native-messaging framing (a small codec), `chrome.*` access.
 - **Why:** typed errors, cancellation and resource safety are exactly what the bridge, the agent processes and the run lifecycle got wrong or hand-rolled in the POC. Schema removes the zod-plus-hand-written-types duplication.
 
@@ -45,9 +47,13 @@ Today every MCP server listens on a localhost port and the service worker probes
 - **API mode:** runs in the page that started it (side panel or full page), as in the POC.
 - **ACP and MCP:** run in the companion; the page only shows progress.
 - **Progress:** every step is persisted, so any open view mirrors a run, and a closed view can reattach.
+- **Pages talk to the worker over RPC** (M1, PR 2). `WorkerRpcs` (in `core`, so M2's broker can forward tool calls with the same schemas) is served over a `chrome.runtime` Port per page, with a small schema-checked protocol carrying `effect/unstable/rpc` messages. The worker adds its `onConnect` and Port listeners synchronously at startup and buffers events, so the Port that woke it isn't lost. A page reconnects on its next call after the worker stops; calls in flight on a dropped Port fail with `WorkerUnavailable` (never hang), and a call that never left the page is retried once on the new Port. Only Ports from the extension's own origin are served.
+- **Undo survives the worker.** `closeTabs` writes the closed tabs to `chrome.storage.session` (`undo:<token>`) before closing anything; `undoClose(token)` works from a restarted worker. Records expire after 10 minutes and are dropped on the next close. The caller passes its window id (`keepWindowAlive`): closing every tab there opens a new one first, so the side panel stays.
 
 ### A5. Storage: `chrome.storage.local` behind a `Store` service
-- **What's stored:** `items`, `runs` (the last N) and `settings`. Each is schema-validated, carries a `version` and migrates on read.
+- **What's stored:** `items` and `settings` (M1, PR 2), `runs` (the last N, PR 3). Each key is stored as `{ version, data }`, one version per key (not per item). Reading decodes the envelope, runs the key's migrations up to the current version, decodes `data` with its schema, and the worker writes a migrated value back. Adding a key is one `StoreKey` value.
+- **Never wipe user data.** A value that doesn't decode (or comes from a newer version) is copied to `backup:<key>:<epoch ms>`, and reads and writes of that key fail with a typed `StoreUnreadable` until the user decides. Views get the same error without making a backup.
+- **Writes:** only the worker writes (A4), read-modify-write under one lock; item changes go through `core`'s pure helpers. Views read `chrome.storage.local` directly (`StoreReader.get`, `StoreReader.watch` as a `Stream`). Settings (API key, model) stay in `chrome.storage.local`, never `sync`.
 - **Room:** `unlimitedStorage` covers large runs with tab snapshots.
 - **Sync:** `storage.onChanged` keeps views in sync, through a custom Atom-backed store.
 - **No sync service, no server.** Nothing leaves the machine except calls to the model the user chose.
@@ -77,6 +83,6 @@ Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid
 
 1. **Unstable Effect modules.** Mitigated by the A1 seams and exact pins.
 2. **Fresh major (4.0.0 is days old).** Budget time for upstream bugs; keep the POC working until M1.
-3. **Bundle size: measured (M1 shell spike, production WXT build, gzip -9).** Shell (React 19 + Atom + Effect): side panel 90 KB, worker 0.3 KB. Adding core's Schema + Toolkit: 119 KB and 39 KB. Adding `effect/ai` (`Chat`, `LanguageModel`) + `FetchHttpClient` + `@effect/ai-anthropic` to the panel: **162 KB** (595 KB minified), of which `@effect/ai-anthropic` is 32 KB (mostly its generated API schemas) and react-dom about 60 KB. `effect/unstable/rpc` on both sides adds 3 KB to the panel and 6 KB to the worker. Loading the agent with `import()` when a run starts keeps the panel's first chunk at 129 KB (agent chunk 36 KB). **Verdict:** over the ~150 KB mark only with the agent loaded eagerly; the extension loads from disk, so this is parse time, not download. Acceptable for M1; recommended: PR 3 loads the agent with `import()`.
+3. **Bundle size: measured (M1 shell spike, production WXT build, gzip -9).** Shell (React 19 + Atom + Effect): side panel 90 KB, worker 0.3 KB. Adding core's Schema + Toolkit: 119 KB and 39 KB. Adding `effect/ai` (`Chat`, `LanguageModel`) + `FetchHttpClient` + `@effect/ai-anthropic` to the panel: **162 KB** (595 KB minified), of which `@effect/ai-anthropic` is 32 KB (mostly its generated API schemas) and react-dom about 60 KB. `effect/unstable/rpc` on both sides adds 3 KB to the panel and 6 KB to the worker. Loading the agent with `import()` when a run starts keeps the panel's first chunk at 129 KB (agent chunk 36 KB). **Verdict:** over the ~150 KB mark only with the agent loaded eagerly; the extension loads from disk, so this is parse time, not download. Acceptable for M1; recommended: PR 3 loads the agent with `import()`. **Shipped in M1 PR 2:** worker 56 KB (TabTools, Store, RPC server, core schemas + Toolkit); side panel unchanged at 90 KB, and 126 KB once it imports `WorkerClient` + `StoreReader` (spike).
 4. **Registry: decided.** Pin `4.0.0-rc.117` for every Effect package: `effect`, `@effect/ai-anthropic`, `@effect/atom-react`, `@effect/platform-*`. `@effect/vitest` is at rc.116, which accepts rc.117. rc.117 still uses the `effect/unstable/*` import paths, and 4.0.0 renamed them (`effect/ai`, `effect/rpc`, ...). The A1 seams keep that rename to a handful of import lines when the registry serves 4.0.0.
 5. **MV3 lifecycle.** No official Effect guidance; A4 keeps long work out of the worker.
