@@ -40,6 +40,8 @@ jobs:
         run: pnpm typecheck:packages
       - name: Test packages
         run: pnpm test:packages
+      - name: Build extension
+        run: pnpm -C packages/extension build
 
       # POC (root extension + companion/), kept green until it is removed after M1
       - name: Typecheck POC
