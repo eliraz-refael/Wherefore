@@ -1,0 +1,23 @@
+{
+  "name": "@tab-intentions/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.116",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  }
+}

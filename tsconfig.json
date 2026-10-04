@@ -4,5 +4,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false
-  }
+  },
+  // POC extension only. Restates .wxt's excludes (exclude is not merged); companion/ and packages/ have their own tsconfigs.
+  "exclude": ["**/node_modules", ".output", "companion", "packages"]
 }

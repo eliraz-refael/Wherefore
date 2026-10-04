@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    // Matches the Node major we run on (22).
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

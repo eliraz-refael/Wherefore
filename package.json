@@ -8,6 +8,8 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "typecheck": "tsc --noEmit",
+    "typecheck:packages": "pnpm -r --filter \"@tab-intentions/*\" typecheck",
+    "test:packages": "pnpm -r --filter \"@tab-intentions/*\" test",
     "postinstall": "wxt prepare",
     "build:all": "wxt build && pnpm -C companion install && pnpm -C companion build",
     "companion:install": "node companion/dist/cli.js install"

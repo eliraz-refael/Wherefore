@@ -1,0 +1,4 @@
+# Product rewrite packages (docs/product/architecture.md). The POC stays the root project
+# until M1 parity; companion/ is the POC companion and keeps its own workspace and lockfile.
+packages:
+  - packages/*
