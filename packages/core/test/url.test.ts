@@ -24,6 +24,14 @@ describe("redactUrl", () => {
     )
   })
 
+  it("redacts presigned-URL signatures and meeting passcodes", () => {
+    const sig = "a".repeat(64)
+    expect(redactUrl(`https://b.s3.amazonaws.com/f.pdf?X-Amz-Expires=3600&X-Amz-Signature=${sig}`)).toBe(
+      "https://b.s3.amazonaws.com/f.pdf?X-Amz-Expires=3600&X-Amz-Signature=REDACTED"
+    )
+    expect(redactUrl(`https://zoom.us/j/123?pwd=${"b".repeat(32)}`)).toBe("https://zoom.us/j/123?pwd=REDACTED")
+  })
+
   it("redacts any value longer than 64 characters", () => {
     const long = "a".repeat(65)
     expect(redactUrl(`https://x.example/?q=${long}&b=${"b".repeat(64)}`)).toBe(
@@ -41,6 +49,7 @@ describe("redactUrl", () => {
     expect(redactUrl(`https://x.example/#${"f".repeat(64)}`)).toBe("https://x.example/#REDACTED")
     expect(redactUrl("https://x.example/cb#access_token=abc&token_type=bearer")).toBe("https://x.example/cb#REDACTED")
     expect(redactUrl("https://x.example/docs#install")).toBe("https://x.example/docs#install")
+    expect(redactUrl("https://x.example/#/reset?token=abc123")).toBe("https://x.example/#REDACTED")
   })
 
   it("removes credentials", () => {

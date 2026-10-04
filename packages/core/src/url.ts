@@ -36,7 +36,7 @@ const isWeb = (url: WhatwgUrl): boolean => url.protocol === "http:" || url.proto
 
 /** Query (and fragment) parameters whose values tend to be secrets. */
 const SECRET_PARAM =
-  /^(code|token|access_token|refresh_token|id_token|key|api_key|apikey|secret|sk|sig|signature|auth|session|sessionid|password|state|_gl|mcid)$/i
+  /^(code|token|access_token|refresh_token|id_token|auth_token|jwt|otp|key|api_key|apikey|secret|sk|sig|signature|auth|session|sessionid|password|pwd|passcode|state|_gl|mcid|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential)$/i
 /** Longer values are redacted whatever their name: they are usually tokens or encoded state. */
 const MAX_PARAM_VALUE = 64
 const MAX_FRAGMENT = 64
@@ -44,8 +44,9 @@ const MAX_URL = 300
 const MAX_UNPARSEABLE = 200
 export const REDACTED = "REDACTED"
 
+// Split on `?` too: a client-side route can carry its own query (`#/reset?token=...`).
 const fragmentHasSecret = (hash: string): boolean =>
-  hash.slice(1).split("&").some((pair) => SECRET_PARAM.test(pair.split("=")[0] ?? ""))
+  hash.slice(1).split(/[?&]/).some((pair) => SECRET_PARAM.test(pair.split("=")[0] ?? ""))
 
 /**
  * The URL as the model may see it: secret or long query values become `REDACTED`, a long or
