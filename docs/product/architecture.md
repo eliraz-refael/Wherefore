@@ -37,7 +37,7 @@ Today every MCP server listens on a localhost port and the service worker probes
 - The service worker opens **one native-messaging connection** to the companion when the companion is installed, and keeps it open. Since Chrome 105, an open native port keeps the worker alive.
 - MCP servers and ACP sessions connect to that broker over a **local socket** (a Unix domain socket, or a named pipe on Windows), speaking `effect/rpc`.
 - Tool calls flow agent → MCP server → broker → native port → service worker → `TabTools`.
-- **Trade-off:** a small Node process stays running while Chrome is open, for users who installed the companion. API-key-only users have no companion and no process.
+- **Trade-off:** a small Node process stays running while Chrome is open, for users who installed the companion. API-key-only users have no companion and no process. Accepted (2026-10-04).
 
 ### A4. The service worker is thin; runs live where they can't be killed
 - **Service worker:** executes tools (`TabTools`), owns storage writes (`Store`), holds the broker connection. It never runs a model loop, because it can be stopped at any time.
@@ -55,7 +55,7 @@ Today every MCP server listens on a localhost port and the service worker probes
 Before calling the model, `core` matches open tabs to open items by normalized URL (dropping fragments and tracking parameters; secret parameters are already redacted for the model). The model only sees unmatched tabs, plus a compact list of open items (id, task, domains), so `submit_intentions` can attach a new tab to an existing item instead of creating a duplicate.
 
 ### A7. UI: React 19 + Atom
-`@effect/atom-react` is the most mature Atom binding. The side panel and the full page share components; styles come from the design tokens on the canvas. Accessibility rules from the POC review carry over: native controls, labelled inputs, focus kept on in-place updates, a live region for status.
+Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid and Vue at the same version as `effect` (all at 4.0.0-rc.117). `@effect/atom-react` is the one the Effect team builds and documents first, and React has the widest component ecosystem. The side panel and the full page share components; styles come from the design tokens on the canvas. Accessibility rules from the POC review carry over: native controls, labelled inputs, focus kept on in-place updates, a live region for status.
 
 ### A8. Testing
 `@effect/vitest` for `core` and services, with `TestClock` and layer mocks for chrome APIs. Companion: the existing no-Chrome smoke tests, ported. Extension end-to-end: Playwright with the unpacked build loaded (from M3).
@@ -75,5 +75,5 @@ Before calling the model, `core` matches open tabs to open items by normalized U
 1. **Unstable Effect modules.** Mitigated by the A1 seams and exact pins.
 2. **Fresh major (4.0.0 is days old).** Budget time for upstream bugs; keep the POC working until M1.
 3. **Bundle size of AI/RPC/Atom is unmeasured.** Measure in M0 with a spike build; the side panel must stay fast to open.
-4. **Registry.** The npm registry in use doesn't serve `effect@4.0.0` yet; we need it to catch up or another registry.
+4. **Registry: decided.** Pin `4.0.0-rc.117` for every Effect package: `effect`, `@effect/ai-anthropic`, `@effect/atom-react`, `@effect/platform-*`. `@effect/vitest` is at rc.116, which accepts rc.117. rc.117 still uses the `effect/unstable/*` import paths, and 4.0.0 renamed them (`effect/ai`, `effect/rpc`, ...). The A1 seams keep that rename to a handful of import lines when the registry serves 4.0.0.
 5. **MV3 lifecycle.** No official Effect guidance; A4 keeps long work out of the worker.
