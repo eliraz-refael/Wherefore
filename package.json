@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:packages": "pnpm -r --filter \"@wherefore/*\" typecheck",
     "test:packages": "pnpm -r --filter \"@wherefore/*\" test",
+    "check:imports": "node scripts/check-unstable-imports.mjs",
     "postinstall": "wxt prepare",
     "build:all": "wxt build && pnpm -C companion install && pnpm -C companion build",
     "companion:install": "node companion/dist/cli.js install"
