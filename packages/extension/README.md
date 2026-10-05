@@ -2,7 +2,7 @@
 
 The Wherefore Chrome extension (MV3, built with [WXT](https://wxt.dev)). See [architecture.md](../../docs/product/architecture.md).
 
-**Status: M1 shell.** A service worker that opens the side panel on toolbar click, and a React 19 + Atom side panel placeholder. Tools, storage, the API agent and the real UI come next.
+**Status: M1, PR 2.** The service worker serves tab tools (list, read, wake, close with undo, resume as a group) and every storage write to the extension's pages over RPC. The side panel is still a placeholder; the API agent and the real UI come next.
 
 ## Build and load
 
@@ -22,6 +22,12 @@ Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → `p
 | Path | What |
 |---|---|
 | `wxt.config.ts` | Manifest (name, key, permissions) and build settings |
-| `src/entrypoints/background.ts` | Service worker |
+| `src/entrypoints/background.ts` | Service worker: wires the layers below |
 | `src/entrypoints/sidepanel/` | Side panel (React 19, `@effect/atom-react`) |
+| `src/chrome/ChromeApi.ts` | The seam around every `chrome.*` call the services make (faked in tests) |
+| `src/background/TabTools.ts` | List, read and wake tabs; close with undo; reopen an item as a tab group |
+| `src/background/Store.ts` | Storage writes: versioned keys, migrations, backups of unreadable values |
+| `src/background/handlers.ts` | `WorkerRpcs` (from core) implemented and served |
+| `src/store/` | Store keys, decoding + migration, `StoreReader` (read and watch, for views) |
+| `src/messaging/` | Page <-> worker RPC over a `chrome.runtime` Port: protocol, worker server, `WorkerClient` |
 | `src/unstable.ts` | The only file here that imports `effect/unstable/*` (`pnpm check:imports`) |
