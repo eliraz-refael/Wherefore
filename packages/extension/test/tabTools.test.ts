@@ -186,6 +186,21 @@ describe("TabTools.closeTabs", () => {
       expect(chrome.urlsIn(1)).toEqual(["https://b.example/"])
     }))
 
+  it.effect("closes and records a repeated id once, so undo brings the tab back once", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome({
+        tabs: [{ id: 1, windowId: 1, url: "https://keep.example/" }, { id: 2, windowId: 1, url: "https://a.example/" }]
+      })
+      const tools = make(chrome.api)
+      const { closed, undo } = yield* tools.closeTabs([tabId(2), tabId(2)], { keepWindowAlive: windowId(1) })
+      expect(closed).toEqual([2])
+      assert(undo !== null)
+      chrome.recentlyClosed.length = 0
+      const result = yield* tools.undoClose(undo)
+      expect(result.restored.map(({ from }) => from)).toEqual([2])
+      expect(chrome.urlsIn(1)).toEqual(["https://keep.example/", "https://a.example/"])
+    }))
+
   it.effect("returns no undo token when nothing was open", () =>
     Effect.gen(function*() {
       const chrome = new FakeChrome()
@@ -271,6 +286,30 @@ describe("TabTools.undoClose", () => {
       expect(chrome.urlsIn(1)).toEqual(["https://keep.example/"])
     }))
 
+  it.effect("reports the tabs it could not restore, and cannot be used twice", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome({
+        tabs: [
+          { id: 1, windowId: 1, url: "https://keep.example/" },
+          { id: 2, windowId: 1, url: "https://a.example/" },
+          { id: 3, windowId: 1, url: "file:///notes.txt" }
+        ],
+        refuseUrls: ["file:///notes.txt"]
+      })
+      const tools = make(chrome.api)
+      const { undo } = yield* tools.closeTabs([tabId(2), tabId(3)], { keepWindowAlive: windowId(1) })
+      assert(undo !== null)
+      chrome.recentlyClosed.length = 0
+      const result = yield* tools.undoClose(undo)
+      expect(result.restored.map(({ from }) => from)).toEqual([2])
+      expect(result.failed).toEqual([3])
+      expect(chrome.session.size).toBe(0)
+      // A retry can't bring tab 2 back a second time.
+      const again = yield* Effect.flip(tools.undoClose(undo))
+      expect(again).toMatchObject({ _tag: "UndoUnavailable", reason: "unknown" })
+      expect(chrome.urlsIn(1)).toEqual(["https://keep.example/", "https://a.example/"])
+    }))
+
   it.effect("rejects a token it never issued", () =>
     Effect.gen(function*() {
       const error = yield* Effect.flip(make(new FakeChrome().api).undoClose(UndoToken.make("nope")))
@@ -304,6 +343,34 @@ describe("TabTools.reopenTabs", () => {
       ])
       const group = chrome.groups.find((g) => g.id === result.groupId)
       expect(group?.title).toBe("Finish reviewing the auth PR and leave c")
+      expect(chrome.tabs.filter((tab) => tab.groupId === result.groupId).map((tab) => tab.id)).toEqual([...result.tabIds])
+    }))
+})
+
+describe("TabTools.reopenTabs with a refused URL", () => {
+  it.effect("skips the tab Chrome refuses and groups the rest", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome({
+        tabs: [{ id: 1, windowId: 4, url: "https://keep.example/" }],
+        refuseUrls: ["file:///notes.txt"]
+      })
+      const item: SavedItem = {
+        id: SavedItemId.make("item-2"),
+        type: "read",
+        task: "Read the notes",
+        intention: "Read the notes",
+        why: "Saved for later",
+        tabs: [
+          { title: "Notes", url: "file:///notes.txt", domain: "" },
+          { title: "Post", url: "https://blog.example/post", domain: "blog.example" }
+        ],
+        status: "open",
+        savedAt: DateTime.makeUnsafe("2026-10-04T09:30:00.000Z")
+      }
+      const result = yield* make(chrome.api).reopenTabs(item, { windowId: windowId(4) })
+      expect(result.tabIds).toHaveLength(1)
+      assert(result.groupId !== null)
+      expect(chrome.urlsIn(4)).toEqual(["https://keep.example/", "https://blog.example/post"])
       expect(chrome.tabs.filter((tab) => tab.groupId === result.groupId).map((tab) => tab.id)).toEqual([...result.tabIds])
     }))
 })

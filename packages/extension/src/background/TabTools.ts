@@ -243,14 +243,16 @@ export const make = (chrome: ChromeApi["Service"]): TabTools["Service"] => {
 
   const closeTabs = (tabIds: ReadonlyArray<TabId>, options: { readonly keepWindowAlive: WindowId }) =>
     Effect.gen(function*() {
+      // A repeated id would be recorded twice, and undo would then bring the tab back twice.
+      const unique = [...new Set(tabIds)]
       const found = yield* Effect.forEach(
-        tabIds,
+        unique,
         (id) => Effect.option(chrome.tabs.get(id)),
         { concurrency: "unbounded" }
       )
       const tabs: Array<ClosedTab> = []
       const missing: Array<TabId> = []
-      tabIds.forEach((id, i) => {
+      unique.forEach((id, i) => {
         const tab = found[i]
         if (tab === undefined || Option.isNone(tab)) missing.push(id)
         else tabs.push({ id, url: urlOf(tab.value), windowId: tab.value.windowId, index: tab.value.index })
@@ -321,7 +323,9 @@ export const make = (chrome: ChromeApi["Service"]): TabTools["Service"] => {
       }
 
       // Whatever the recently-closed list no longer had (it keeps 25 entries): reopen by URL where it was.
-      const windows = new Set((yield* chrome.windows.getAll).map((window) => window.id))
+      const windows = new Set(
+        (yield* chrome.windows.getAll.pipe(Effect.orElseSucceed(() => []))).map((window) => window.id)
+      )
       const rest = [...pending.values()].flat().sort((a, b) => a.windowId - b.windowId || a.index - b.index)
       for (const tab of rest) {
         if (tab.url === "") {
@@ -353,20 +357,24 @@ export const make = (chrome: ChromeApi["Service"]): TabTools["Service"] => {
         yield* chrome.storage.session.remove(key)
         return yield* new UndoUnavailable({ reason: "expired" })
       }
-      const result = yield* restore(record.value.tabs)
+      // One-shot: drop the record before restoring, so a failure after some tabs are back
+      // (or a retry) can't restore them a second time.
       yield* chrome.storage.session.remove(key)
-      return result
+      return yield* restore(record.value.tabs)
     }).pipe(Effect.uninterruptible, Semaphore.withPermit(undoLock))
 
   // ---------- resume ----------
 
   const reopenTabs = (item: SavedItem, options: { readonly windowId: WindowId }) =>
     Effect.gen(function*() {
+      // One URL Chrome refuses (e.g. file://) must not abort the resume and strand the tabs already opened.
       const created = yield* Effect.forEach(
         item.tabs,
-        (tab, i) => chrome.tabs.create({ url: tab.url, windowId: options.windowId, active: i === 0 })
+        (tab, i) => Effect.option(chrome.tabs.create({ url: tab.url, windowId: options.windowId, active: i === 0 }))
       )
-      const tabIds = created.flatMap((tab) => (tab.id === undefined ? [] : [TabId.make(tab.id)]))
+      const tabIds = created.flatMap((tab) =>
+        Option.isSome(tab) && tab.value.id !== undefined ? [TabId.make(tab.value.id)] : []
+      )
       const [first, ...others] = tabIds
       if (first === undefined) return { tabIds, groupId: null }
       const groupId = yield* chrome.tabs.group([first, ...others], options.windowId)

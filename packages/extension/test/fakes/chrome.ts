@@ -36,6 +36,8 @@ export interface FakeChromeInit {
   readonly reloadCompletes?: boolean
   /** How many entries `sessions.getRecentlyClosed` keeps (Chrome: 25). */
   readonly maxRecentlyClosed?: number
+  /** URLs `tabs.create` refuses, like Chrome does for `file://` without file access. */
+  readonly refuseUrls?: ReadonlyArray<string>
 }
 
 const tabOf = (init: FakeTabInit, index: number): Browser.tabs.Tab => ({
@@ -73,6 +75,7 @@ export class FakeChrome {
   readonly calls: Array<string> = []
   reloadCompletes: boolean
   private readonly maxRecentlyClosed: number
+  private readonly refuseUrls: ReadonlySet<string>
   private nextTabId = 1000
   private nextGroupId = 1
   private nextSessionId = 1
@@ -91,6 +94,7 @@ export class FakeChrome {
     for (const [key, value] of Object.entries(init.session ?? {})) this.session.set(key, clone(value))
     this.reloadCompletes = init.reloadCompletes ?? true
     this.maxRecentlyClosed = init.maxRecentlyClosed ?? 25
+    this.refuseUrls = new Set(init.refuseUrls ?? [])
   }
 
   tabsIn(windowId: number): Array<Browser.tabs.Tab> {
@@ -220,9 +224,11 @@ export class FakeChrome {
           return tab === undefined ? this.fail("tabs.get", `No tab with id: ${tabId}.`) : Effect.succeed({ ...tab })
         }),
       create: (properties) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           this.calls.push(`tabs.create ${properties.windowId ?? "-"} ${properties.url ?? "newtab"}`)
-          return { ...this.createTab(properties) }
+          return properties.url !== undefined && this.refuseUrls.has(properties.url)
+            ? this.fail("tabs.create", `Cannot navigate to ${properties.url}.`)
+            : Effect.succeed({ ...this.createTab(properties) })
         }),
       remove: (tabIds) =>
         Effect.sync(() => {
