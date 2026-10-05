@@ -8,6 +8,7 @@
 import { DateTime, Schema } from "effect"
 import { RunId } from "./ids.ts"
 import { Answer, Intention, Question } from "./intention.ts"
+import type { ApiModel } from "./settings.ts"
 import { TabSnapshot } from "./tab.ts"
 
 const DateTimeUtc = Schema.DateTimeUtcFromString
@@ -208,17 +209,15 @@ export interface ModelPrice {
   readonly cacheRead: number
 }
 
-/** The models we know prices for (Anthropic first-party list prices, 2026-10). */
-export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
-  "claude-fable-5-1": { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 },
+/** Prices of the models API mode offers (Anthropic first-party list prices, 2026-10). */
+export const MODEL_PRICES: Readonly<Record<ApiModel, ModelPrice>> = {
   "claude-opus-5-5": { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 },
-  "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 }
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.2 }
 }
 
 /** Approximate cost of `usage` on `model`, or `undefined` when its price isn't known. */
 export const estimateCostUsd = (model: string, usage: TokenUsage): number | undefined => {
-  const price = Object.hasOwn(MODEL_PRICES, model) ? MODEL_PRICES[model] : undefined
+  const price = Object.hasOwn(MODEL_PRICES, model) ? MODEL_PRICES[model as ApiModel] : undefined
   if (price === undefined) return undefined
   return (
     usage.inputTokens * price.input +

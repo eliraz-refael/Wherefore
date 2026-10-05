@@ -15,14 +15,15 @@
  * - Prompt caching: the system prompt is a cache breakpoint (tools render before it, so they are
  *   cached with it), and top-level `cache_control` moves a second breakpoint to the end of the
  *   conversation on every request, so each turn reads the previous turn's prefix from the cache.
- * - Adaptive thinking at `medium` effort. Thinking blocks are kept in the history unchanged.
+ * - Adaptive thinking at `medium` effort, which every offered model (core's `API_MODELS`) takes.
+ *   Thinking blocks are kept in the history unchanged.
  * - Plain (non-strict) tools: core's handlers validate every call and return problems to the
  *   model. Strict tool use is left off until it is tried against the live API.
  * - No server-side refusal fallbacks: rc.117's response schema doesn't know the `fallback` block
  *   they add, so a refusal ends the run with a typed error instead.
  */
 import type { Settings, TokenUsage, TriageHandlers, TurnStop } from "@wherefore/core"
-import { TriageToolkit } from "@wherefore/core"
+import { modelOf, TriageToolkit } from "@wherefore/core"
 import { Context, Duration, Effect, Layer, Redacted } from "effect"
 import {
   AiError,
@@ -36,9 +37,6 @@ import {
   type Response
 } from "../unstable.ts"
 import { type ModelError, modelError } from "./ModelError.ts"
-
-/** The model API mode uses when Settings name none. */
-export const DEFAULT_MODEL = "claude-opus-5-5"
 
 /**
  * Per-request output budget, thinking included. Requests aren't streamed, so this stays under the
@@ -79,7 +77,10 @@ export interface ConverseOptions {
 }
 
 export class ModelClient extends Context.Service<ModelClient, {
-  /** Starts a conversation with the model `settings` name. Fails with `missing_key` without an API key. */
+  /**
+   * Starts a conversation with the model `settings` name, or the default when it isn't offered
+   * (core's `modelOf`). Fails with `missing_key` without an API key.
+   */
   readonly converse: (options: ConverseOptions) => Effect.Effect<Conversation, ModelError>
 }>()("@wherefore/extension/ModelClient") {
   /** Anthropic, through the browser's `fetch`. */
@@ -117,7 +118,7 @@ const make = (
     Effect.gen(function*() {
       const apiKey = settings.apiKey
       if (apiKey === undefined) return yield* modelError("missing_key")
-      const model = settings.model ?? DEFAULT_MODEL
+      const model = modelOf(settings)
       const languageModel = yield* build({ apiKey, model })
       const toolkit = yield* TriageToolkit.pipe(Effect.provide(TriageToolkit.toLayer(handlers)))
       const chat = yield* Chat.fromPrompt([

@@ -162,6 +162,21 @@ describe("ModelClient (Anthropic)", () => {
     }).pipe(withFetch(fetch))
   })
 
+  it.effect("falls back to the default model when Settings name one that isn't offered", () => {
+    const { sent, fetch } = fakeFetch([
+      () => json(200, message([{ type: "text", text: "Hi" }], "end_turn")),
+      () => json(200, message([{ type: "text", text: "Hi" }], "end_turn"))
+    ])
+    return Effect.gen(function*() {
+      for (const stale of ["claude-haiku-4-5", "claude-fable-5-1"]) {
+        const conversation = yield* converse(stale)
+        expect(conversation.model).toBe("claude-opus-5-5")
+        yield* conversation.next("hello")
+      }
+      expect(sent.map((request) => request.body.model)).toEqual(["claude-opus-5-5", "claude-opus-5-5"])
+    }).pipe(withFetch(fetch))
+  })
+
   it.effect("reports a refusal and a cut-off reply as stop reasons", () => {
     const { fetch } = fakeFetch([
       () => json(200, message([], "refusal")),

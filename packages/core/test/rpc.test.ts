@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 import {
+  API_MODELS,
+  DEFAULT_MODEL,
   ListTabs,
+  MODEL_PRICES,
+  modelOf,
   ReadPages,
   RemovedItem,
   RunRpcs,
@@ -66,6 +70,21 @@ describe("Settings", () => {
     expect(decodeOk(Settings, {})).toEqual({})
     expect(decodeOk(Settings, { apiKey: "sk-test", model: "m" })).toEqual({ apiKey: "sk-test", model: "m" })
     expect(rejects(Settings, { apiKey: "" })).toBe(true)
+  })
+
+  it("offers Opus and Sonnet only, each with a price, and Opus is the default", () => {
+    expect(API_MODELS.map((model) => model.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5"])
+    expect(Object.keys(MODEL_PRICES).sort()).toEqual(API_MODELS.map((model) => model.id).sort())
+    expect(DEFAULT_MODEL).toBe("claude-opus-5-5")
+  })
+
+  it("uses the model Settings name when it is offered, else the default", () => {
+    expect(modelOf({})).toBe("claude-opus-5-5")
+    expect(modelOf({ model: "claude-sonnet-5-5" })).toBe("claude-sonnet-5-5")
+    // A model that isn't offered (or no longer is) still loads, and runs on the default.
+    expect(decodeOk(Settings, { model: "claude-haiku-4-5" })).toEqual({ model: "claude-haiku-4-5" })
+    expect(modelOf({ model: "claude-haiku-4-5" })).toBe("claude-opus-5-5")
+    expect(modelOf({ model: "toString" })).toBe("claude-opus-5-5")
   })
 })
 

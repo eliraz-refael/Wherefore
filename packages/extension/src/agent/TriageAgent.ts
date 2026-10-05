@@ -26,6 +26,7 @@ import {
   emptyUsage,
   estimateCostUsd,
   IntentionId,
+  modelOf,
   type PageRead,
   type Run,
   type RunError,
@@ -61,7 +62,7 @@ import { WorkerClient, WorkerUnavailable } from "../messaging/WorkerClient.ts"
 import { type RunAlreadyActive, RunLocks } from "../runs/RunLocks.ts"
 import { settingsKey } from "../store/keys.ts"
 import { StoreReader } from "../store/StoreReader.ts"
-import { type Conversation, DEFAULT_MODEL, ModelClient, type ModelTurn } from "./ModelClient.ts"
+import { type Conversation, ModelClient, type ModelTurn } from "./ModelClient.ts"
 import { type ModelError, modelError, toRunError } from "./ModelError.ts"
 import { Questions, QuestionsInbox } from "./Questions.ts"
 
@@ -161,7 +162,7 @@ const make = Effect.gen(function*() {
         const state = yield* SubscriptionRef.make<Run>({
           id,
           mode: "api",
-          model: settings.model ?? DEFAULT_MODEL,
+          model: modelOf(settings),
           startedAt: yield* DateTime.now,
           status: "running",
           tabs: [],

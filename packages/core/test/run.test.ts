@@ -133,6 +133,8 @@ describe("usage and cost", () => {
     const usage = { requests: 3, inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 2_000_000, cacheWriteTokens: 400_000 }
     // Opus 5.5: $4 in, $20 out, $5 cache write, $0.20 cache read per MTok.
     expect(estimateCostUsd("claude-opus-5-5", usage)).toBeCloseTo(4 + 2 + 2 + 0.4, 6)
+    // Sonnet 5.5: $2 in, $10 out, $2.50 cache write, $0.20 cache read per MTok.
+    expect(estimateCostUsd("claude-sonnet-5-5", usage)).toBeCloseTo(2 + 1 + 1 + 0.4, 6)
     expect(estimateCostUsd("some-future-model", usage)).toBeUndefined()
     expect(estimateCostUsd("toString", usage)).toBeUndefined()
   })
