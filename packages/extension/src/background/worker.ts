@@ -1,10 +1,12 @@
 /**
- * The whole service worker as one layer: migrate storage at startup, then serve `WorkerRpcs`.
- * The entrypoint provides the real `ChromeApi` and `PortListener`; tests provide fakes.
+ * The whole service worker as one layer: migrate storage at startup, mark runs whose page is gone
+ * as interrupted, then serve `WorkerRpcs`. The entrypoint provides the real `ChromeApi`,
+ * `PortListener` and `RunLocks`; tests provide fakes.
  */
 import { Effect, Layer } from "effect"
 import type { ChromeApi } from "../chrome/ChromeApi.ts"
 import type { PortListener } from "../messaging/server.ts"
+import { RunLocks } from "../runs/RunLocks.ts"
 import { serveWorkerRpcs } from "./handlers.ts"
 import { Store } from "./Store.ts"
 import { TabTools } from "./TabTools.ts"
@@ -22,7 +24,22 @@ const migrateStorage = Layer.effectDiscard(
   )
 )
 
-export const WorkerLayer: Layer.Layer<never, never, ChromeApi | PortListener> = Layer.mergeAll(
-  migrateStorage,
+/**
+ * A run left "running" by a page that closed while the worker was stopped is marked at the
+ * worker's next start. (A run whose page closes while the worker runs is marked by the next
+ * `save_run` or `check_runs`.)
+ */
+const sweepRuns = Layer.effectDiscard(
+  Effect.gen(function*() {
+    const store = yield* Store
+    const locks = yield* RunLocks
+    yield* store.interruptRuns(locks.isLive).pipe(
+      Effect.catch((error) => Effect.logWarning(`Store: couldn't check for interrupted runs: ${error.message}`))
+    )
+  })
+)
+
+export const WorkerLayer: Layer.Layer<never, never, ChromeApi | PortListener | RunLocks> = Layer.mergeAll(
+  Layer.provideMerge(sweepRuns, migrateStorage),
   serveWorkerRpcs
 ).pipe(Layer.provide(Layer.mergeAll(TabTools.layer, Store.layer)))

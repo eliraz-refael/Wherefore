@@ -4,6 +4,7 @@ import { defineBackground } from "wxt/utils/define-background"
 import { WorkerLayer } from "../background/worker.ts"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
 import { listenForPorts, PortListener } from "../messaging/server.ts"
+import { RunLocks } from "../runs/RunLocks.ts"
 
 /**
  * The service worker (architecture A4): executes tab tools and owns storage writes for the
@@ -19,7 +20,7 @@ export default defineBackground(() => {
   const ports = listenForPorts(browser.runtime.onConnect, `chrome-extension://${browser.runtime.id}/`)
 
   WorkerLayer.pipe(
-    Layer.provide([ChromeApi.layer, Layer.succeed(PortListener)(ports)]),
+    Layer.provide([ChromeApi.layer, RunLocks.layer, Layer.succeed(PortListener)(ports)]),
     Layer.launch,
     Effect.tapCause((cause) => Effect.logError("Wherefore worker stopped", cause)),
     Effect.runFork

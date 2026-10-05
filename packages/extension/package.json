@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect/ai-anthropic": "4.0.0-rc.117",
     "@effect/atom-react": "4.0.0-rc.117",
     "@wherefore/core": "workspace:*",
     "effect": "4.0.0-rc.117",

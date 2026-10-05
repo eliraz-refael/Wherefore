@@ -110,6 +110,9 @@ export const TriageToolkit = Toolkit.make(ListTabs, ReadPages, WakeAndReadPages,
 
 export type TriageToolName = keyof typeof TriageToolkit.tools
 
+/** Handlers for every tool, keyed by tool name: what the API agent (and M2's broker) implement. */
+export type TriageHandlers = Toolkit.HandlersFrom<typeof TriageToolkit.tools>
+
 /** A tool as a model provider or MCP client sees it. */
 export interface ToolJsonSchema {
   readonly name: TriageToolName

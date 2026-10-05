@@ -7,24 +7,29 @@
  * and therefore every write to that key, fails with `StoreUnreadable`.
  *
  * Writes are read-modify-write under one lock, so concurrent RPCs can't lose each other's
- * updates. Item operations are core's pure helpers (savedItem.ts).
+ * updates; a change that returns the value it was given writes nothing. Item and run operations
+ * are core's pure helpers (savedItem.ts, run.ts).
  */
 import {
   type BrowserError,
+  interruptRun,
   ItemNotFound,
   markDone,
   type RemovedItem,
   removeItem,
   reopen,
   restoreItem,
+  type Run,
+  type RunId,
   type SavedItem,
   type SavedItemId,
   type Settings,
-  StoreUnreadable
+  StoreUnreadable,
+  upsertRun
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { itemsKey, settingsKey, storeKeys } from "../store/keys.ts"
+import { itemsKey, runsKey, settingsKey, storeKeys } from "../store/keys.ts"
 import { decodeStored, encodeStored, type StoreKey } from "../store/StoreKey.ts"
 
 export type StoreError = StoreUnreadable | BrowserError
@@ -51,6 +56,16 @@ export class Store extends Context.Service<Store, {
   readonly removeItem: (id: SavedItemId) => Effect.Effect<RemovedItem, ItemNotFound | StoreError>
   readonly restoreItem: (removed: RemovedItem) => Effect.Effect<void, StoreError>
   readonly updateSettings: (settings: Settings) => Effect.Effect<Settings, StoreError>
+  /** Stores a run: replaces the one with the same id, or adds it, keeping the newest `MAX_RUNS`. */
+  readonly saveRun: (run: Run) => Effect.Effect<void, StoreError>
+  /**
+   * Marks every "running" run whose page is gone (`isLive` says false) as interrupted, except
+   * `except`. Returns the ids it marked.
+   */
+  readonly interruptRuns: (
+    isLive: (id: RunId) => Effect.Effect<boolean>,
+    except?: RunId
+  ) => Effect.Effect<ReadonlyArray<RunId>, StoreError>
 }>()("@wherefore/extension/Store") {
   static readonly layer: Layer.Layer<Store, never, ChromeApi> = Layer.effect(Store)(
     Effect.gen(function*() {
@@ -111,8 +126,9 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
     change: (value: A) => Effect.Effect<readonly [B, A], E>
   ): Effect.Effect<B, E | StoreError> =>
     Effect.gen(function*() {
-      const [result, next] = yield* Effect.flatMap(readUnlocked(key), change)
-      yield* local.set({ [key.name]: encodeStored(key, next) })
+      const current = yield* readUnlocked(key)
+      const [result, next] = yield* change(current)
+      if (next !== current) yield* local.set({ [key.name]: encodeStored(key, next) })
       return result
     }).pipe(Semaphore.withPermit(lock))
 
@@ -152,6 +168,19 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
           onSome: ({ items: rest, removed }) => Effect.succeed([removed, rest] as const)
         })),
     restoreItem: (removed) => update(itemsKey, (items) => Effect.succeed([undefined, restoreItem(items, removed)] as const)),
-    updateSettings: (settings) => update(settingsKey, () => Effect.succeed([settings, settings] as const))
+    updateSettings: (settings) => update(settingsKey, () => Effect.succeed([settings, settings] as const)),
+    saveRun: (run) => update(runsKey, (runs) => Effect.succeed([undefined, upsertRun(runs, run)] as const)),
+    interruptRuns: (isLive, except) =>
+      update(runsKey, (runs) =>
+        Effect.gen(function*() {
+          const stale: Array<RunId> = []
+          for (const run of runs) {
+            if (run.status === "running" && run.id !== except && !(yield* isLive(run.id))) stale.push(run.id)
+          }
+          if (stale.length === 0) return [stale, runs] as const
+          const now = yield* DateTime.now
+          yield* Effect.logInfo(`Store: marked ${stale.length} run(s) interrupted: their page is gone`)
+          return [stale, runs.map((run) => (stale.includes(run.id) ? interruptRun(run, now) : run))] as const
+        }))
   }
 }

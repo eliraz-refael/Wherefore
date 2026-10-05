@@ -1,7 +1,7 @@
 /**
- * Everything the extension keeps in `chrome.storage.local` (architecture A5). PR 3 adds `runs`.
+ * Everything the extension keeps in `chrome.storage.local` (architecture A5).
  */
-import { defaultSettings, SavedItem, Settings } from "@wherefore/core"
+import { defaultSettings, Run, SavedItem, Settings } from "@wherefore/core"
 import { Schema } from "effect"
 import type { StoreKey } from "./StoreKey.ts"
 
@@ -23,5 +23,17 @@ export const settingsKey: StoreKey<Settings> = {
   empty: defaultSettings
 }
 
+/**
+ * Triage runs, oldest first, at most `MAX_RUNS` (core run.ts). The page running a run writes it
+ * after every step (through the worker), so other views can mirror it.
+ */
+export const runsKey: StoreKey<ReadonlyArray<Run>> = {
+  name: "runs",
+  version: 1,
+  schema: Schema.Array(Run),
+  migrations: {},
+  empty: []
+}
+
 /** Every key, for startup migration. */
-export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey]
+export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey, runsKey]

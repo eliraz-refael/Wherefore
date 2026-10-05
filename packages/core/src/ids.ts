@@ -31,3 +31,7 @@ export type QuestionId = typeof QuestionId.Type
 /** Names one undoable close in the worker's session storage, so undo survives a worker restart. */
 export const UndoToken = Schema.NonEmptyString.pipe(Schema.brand("UndoToken"))
 export type UndoToken = typeof UndoToken.Type
+
+/** Identifies one triage run, e.g. in the stored `runs` list. */
+export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
+export type RunId = typeof RunId.Type

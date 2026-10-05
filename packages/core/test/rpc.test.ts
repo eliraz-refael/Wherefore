@@ -4,6 +4,7 @@ import {
   ListTabs,
   ReadPages,
   RemovedItem,
+  RunRpcs,
   Settings,
   StoreRpcs,
   TabRpcs,
@@ -33,9 +34,14 @@ describe("WorkerRpcs", () => {
     expect(Schema.decodeUnknownSync(payload)({ tab_ids: [3, 4], max_chars: 500 })).toEqual({ tabIds: [3, 4], maxChars: 500 })
   })
 
-  it("is the merge of the tool, tab and store groups", () => {
+  it("is the merge of the tool, tab, store and run groups", () => {
     const tags = [...WorkerRpcs.requests.keys()]
-    expect(tags).toEqual([...TabToolRpcs.requests.keys(), ...TabRpcs.requests.keys(), ...StoreRpcs.requests.keys()])
+    expect(tags).toEqual([
+      ...TabToolRpcs.requests.keys(),
+      ...TabRpcs.requests.keys(),
+      ...StoreRpcs.requests.keys(),
+      ...RunRpcs.requests.keys()
+    ])
     expect(tags).toEqual([
       "list_tabs",
       "read_pages",
@@ -48,7 +54,9 @@ describe("WorkerRpcs", () => {
       "mark_open",
       "remove_item",
       "restore_item",
-      "update_settings"
+      "update_settings",
+      "save_run",
+      "check_runs"
     ])
   })
 })
