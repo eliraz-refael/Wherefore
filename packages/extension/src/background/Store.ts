@@ -29,6 +29,8 @@ import {
   type RunIndexEntry,
   type SavedItem,
   type SavedItemId,
+  type ResettableKey,
+  setReviewed,
   type Settings,
   StoreUnreadable,
   upsertRunIndex
@@ -79,6 +81,17 @@ export class Store extends Context.Service<Store, {
     isLive: (id: RunId) => Effect.Effect<boolean>,
     except?: RunId
   ) => Effect.Effect<ReadonlyArray<RunId>, StoreError>
+  /**
+   * Marks a stored run's result reviewed (now), or waiting for review again. A run that is no longer
+   * stored is ignored.
+   */
+  readonly setRunReviewed: (id: RunId, reviewed: boolean) => Effect.Effect<void, StoreError>
+  /**
+   * The way out of `StoreUnreadable` for a fixed key: makes sure the unreadable value is backed up,
+   * then removes the key, so it reads as empty. Returns the backup key; `null` (and no change) when
+   * the value was readable after all.
+   */
+  readonly resetKey: (name: ResettableKey) => Effect.Effect<string | null, BrowserError>
 }>()("@wherefore/extension/Store") {
   static readonly layer: Layer.Layer<Store, never, ChromeApi> = Layer.effect(Store)(
     Effect.gen(function*() {
@@ -224,9 +237,33 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
         return [changed, items.map((existing, i) => (i === index ? changed : existing))] as const
       }))
 
+  const setRunReviewed = (id: RunId, reviewed: boolean) =>
+    Effect.gen(function*() {
+      const key = runKey(id)
+      const run = yield* readUnlocked(key)
+      if (run === undefined) return
+      const next = setReviewed(run, reviewed ? yield* DateTime.now : undefined)
+      if (next !== run) yield* local.set({ [key.name]: encodeStored(key, next) })
+    }).pipe(Semaphore.withPermit(lock))
+
+  const resetKey = (name: ResettableKey) =>
+    Effect.gen(function*() {
+      const key = storeKeys.find((candidate) => candidate.name === name)
+      if (key === undefined) return null
+      const raw = (yield* local.get(key.name))[key.name]
+      const result = decodeStored(key, raw)
+      if (result._tag === "Success") return null
+      const backupKey = yield* backUp(key, raw, result.failure)
+      yield* local.remove(key.name)
+      yield* Effect.logWarning(`Store: reset "${key.name}" at the user's request; the old value is kept in ${backupKey}`)
+      return backupKey
+    }).pipe(Semaphore.withPermit(lock))
+
   return {
     read,
     migrateAll,
+    setRunReviewed,
+    resetKey,
     saveItems: (incoming) =>
       update(itemsKey, (items) => {
         const byId = new Map(incoming.map((item) => [item.id, item]))

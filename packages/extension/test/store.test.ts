@@ -146,6 +146,34 @@ describe("Store item operations", () => {
     }))
 })
 
+describe("Store recovery", () => {
+  it.effect("resets an unreadable key: the raw value stays in a backup, the key reads as empty again", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome({ local: { items: { version: 99, data: "from the future" } } })
+      const store = makeStore(chrome.api)
+      const backupKey = yield* store.resetKey("items")
+      assert(backupKey !== null)
+      expect(backupKey.startsWith("backup:items:")).toBe(true)
+      expect(chrome.local.get(backupKey)).toMatchObject({ raw: { version: 99, data: "from the future" } })
+      expect(chrome.local.has("items")).toBe(false)
+      expect(yield* store.read(itemsKey)).toEqual([])
+      yield* store.saveItems([item("a")])
+      expect((yield* store.read(itemsKey)).map((i) => i.id)).toEqual(["a"])
+    }))
+
+  it.effect("reuses the backup the worker already made, and leaves a readable key alone", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome({ local: { items: { version: 1, data: [{ broken: true }] }, settings: { version: 1, data: { apiKey: "k" } } } })
+      const store = makeStore(chrome.api)
+      const failed = yield* Effect.flip(store.read(itemsKey))
+      assert(failed._tag === "StoreUnreadable")
+      expect(yield* store.resetKey("items")).toBe(failed.backupKey)
+      expect([...chrome.local.keys()].filter((key) => key.startsWith("backup:"))).toHaveLength(1)
+      expect(yield* store.resetKey("settings")).toBeNull()
+      expect(chrome.local.get("settings")).toEqual({ version: 1, data: { apiKey: "k" } })
+    }))
+})
+
 describe("StoreReader", () => {
   const readerFor = (chrome: FakeChrome) =>
     Effect.provide(
@@ -234,6 +262,19 @@ describe("Store runs: one key per run", () => {
       yield* store.saveRun(run("a", "succeeded"))
       expect(indexOf(chrome)).toEqual([{ id: "a", status: "succeeded" }, { id: "b", status: "running" }])
       expect(yield* store.read(runKey(RunId.make("zzz")))).toBeUndefined()
+    }))
+
+  it.effect("marks a run's result reviewed and back, and ignores runs that aren't stored", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const store = makeStore(chrome.api)
+      yield* store.saveRun(run("a", "succeeded"))
+      yield* store.setRunReviewed(RunId.make("a"), true)
+      expect((chrome.local.get("run:a") as { data: { reviewedAt?: string } }).data.reviewedAt).toBeDefined()
+      yield* store.setRunReviewed(RunId.make("a"), false)
+      expect(chrome.local.get("run:a")).toEqual({ version: 1, data: wireRun("a", "succeeded") })
+      yield* store.setRunReviewed(RunId.make("missing"), true)
+      expect(chrome.local.has("run:missing")).toBe(false)
     }))
 
   it.effect(`keeps the newest ${MAX_RUNS} runs and removes the older run keys`, () =>
