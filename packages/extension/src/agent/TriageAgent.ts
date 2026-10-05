@@ -196,12 +196,17 @@ const make = Effect.gen(function*() {
     const { id, state } = ctx
     const saving = Semaphore.makeUnsafe(1)
 
-    /** Stores the run as it is now. Idempotent, so a save that didn't reach the worker is retried once. */
-    const persist = Effect.flatMap(SubscriptionRef.get(state), (run) =>
-      worker.call("save_run", { run }).pipe(
-        Effect.retry({ times: 1, while: (error) => error._tag === "WorkerUnavailable" }),
-        Effect.catch((error) => Effect.logWarning(`Run ${id}: couldn't store a step: ${error.message}`))
-      )).pipe(Semaphore.withPermit(saving))
+    /**
+     * Stores the run as it is now. Idempotent, so a save that didn't reach the worker is retried
+     * (`retries` times).
+     */
+    const save = (retries: number) =>
+      Effect.flatMap(SubscriptionRef.get(state), (run) =>
+        worker.call("save_run", { run }).pipe(
+          Effect.retry({ times: retries, while: (error) => error._tag === "WorkerUnavailable" }),
+          Effect.catch((error) => Effect.logWarning(`Run ${id}: couldn't store a step: ${error.message}`))
+        )).pipe(Semaphore.withPermit(saving))
+    const persist = save(1)
 
     const update = (change: (run: Run) => Run) => Effect.andThen(SubscriptionRef.update(state, change), persist)
     const addStep = (step: RunStep) => update((run) => ({ ...run, steps: [...run.steps, step] }))
@@ -430,7 +435,9 @@ const make = Effect.gen(function*() {
           }
         }
         const stopped = ending.status === "cancelled" ? "Stopped" : "Didn't finish"
-        yield* update((run) => ({
+        // The final state is saved harder than a step: if it is lost, the stored run stays "running"
+        // and is later marked interrupted once the lock is released, though it finished.
+        yield* SubscriptionRef.update(state, (run): Run => ({
           ...run,
           ...ending,
           finishedAt,
@@ -439,6 +446,7 @@ const make = Effect.gen(function*() {
             step.kind === "tool" && step.status === "running" ? { ...step, status: "error", summary: stopped } : step
           )
         }))
+        yield* save(4)
       }).pipe(Effect.uninterruptible)
 
     return Effect.andThen(persist, loop).pipe(Effect.onExit(finish))
