@@ -37,7 +37,7 @@ import {
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { itemsKey, runIndexKey, runKey, settingsKey, storeKeys } from "../store/keys.ts"
+import { itemsKey, runIndexKey, runKey, runKeyPrefix, settingsKey, storeKeys } from "../store/keys.ts"
 import { decodeStored, encodeStored, type StoreKey } from "../store/StoreKey.ts"
 
 export type StoreError = StoreUnreadable | BrowserError
@@ -254,7 +254,12 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
       const result = decodeStored(key, raw)
       if (result._tag === "Success") return null
       const backupKey = yield* backUp(key, raw, result.failure)
-      yield* local.remove(key.name)
+      // Run keys are found (and pruned) only through the index: starting the index over would leave
+      // every stored run behind for good. A running run's page stores it again on its next step.
+      const runKeys = name === runIndexKey.name
+        ? Object.keys(yield* local.get(null)).filter((stored) => stored.startsWith(runKeyPrefix))
+        : []
+      yield* local.remove([key.name, ...runKeys])
       yield* Effect.logWarning(`Store: reset "${key.name}" at the user's request; the old value is kept in ${backupKey}`)
       return backupKey
     }).pipe(Semaphore.withPermit(lock))

@@ -172,6 +172,30 @@ describe("Store recovery", () => {
       expect(yield* store.resetKey("settings")).toBeNull()
       expect(chrome.local.get("settings")).toEqual({ version: 1, data: { apiKey: "k" } })
     }))
+
+  it.effect("resetting the run index also drops the run keys it listed, and keeps every backup", () =>
+    Effect.gen(function*() {
+      const oldBackup = { at: 1, reason: "unreadable", raw: { version: 99 } }
+      const chrome = new FakeChrome({
+        local: {
+          runIndex: { version: 99, data: "from the future" },
+          [`${runKeyPrefix}a`]: { version: 1, data: { id: "a" } },
+          [`${runKeyPrefix}b`]: { version: 1, data: { id: "b" } },
+          "backup:run:c:1": oldBackup,
+          "backup:items:1": oldBackup,
+          items: { version: 1, data: [storedItem("x")] }
+        }
+      })
+      const backupKey = yield* makeStore(chrome.api).resetKey("runIndex")
+      assert(backupKey !== null)
+      expect(backupKey.startsWith("backup:runIndex:")).toBe(true)
+      expect([...chrome.local.keys()].filter((key) => key.startsWith(runKeyPrefix))).toEqual([])
+      expect(chrome.local.has("runIndex")).toBe(false)
+      expect(chrome.local.get("backup:run:c:1")).toEqual(oldBackup)
+      expect(chrome.local.get("backup:items:1")).toEqual(oldBackup)
+      expect(chrome.local.get(backupKey)).toMatchObject({ raw: { version: 99, data: "from the future" } })
+      expect(chrome.local.has("items")).toBe(true)
+    }))
 })
 
 describe("StoreReader", () => {

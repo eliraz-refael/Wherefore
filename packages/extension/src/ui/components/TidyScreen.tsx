@@ -116,7 +116,13 @@ function QuestionCard({ run, step }: { readonly run: Run; readonly step: Questio
     }
     setSent(true)
     const accepted = await act(answerAsk(run, step.callId, given))
-    if (accepted._tag === "Some" && !accepted.value) toast("That question was already answered, or its tidy-up stopped.")
+    if (accepted._tag === "Some" && accepted.value) return
+    if (accepted._tag === "Some") toast("That question was already answered, or its tidy-up stopped.")
+    // Not taken (failed, timed out, or refused): offer the questions again. If the ask was answered
+    // elsewhere or its run stopped, the stored run moves on and this card goes away by itself.
+    setAnswers([])
+    setIndex(0)
+    setSent(false)
   }
 
   return (

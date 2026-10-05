@@ -255,7 +255,9 @@ export const saveAndClose = (run: Run, model: ReviewModel) =>
       ? `${saved} and closed ${tabCount(closed)}.`
       : saved !== ""
       ? `${saved}.`
-      : `Closed ${tabCount(closed)}.`
+      : closed > 0
+      ? `Closed ${tabCount(closed)}.`
+      : "Done."
     return {
       message,
       undo: undoing(Effect.gen(function*() {

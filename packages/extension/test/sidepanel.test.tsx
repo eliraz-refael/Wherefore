@@ -9,6 +9,7 @@ import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
 import { Effect } from "effect"
 import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
+import { FakeRelayHub } from "./fakes/page.ts"
 import { envelope, ISO_NOW, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
 
 const panels: Array<Panels> = []
@@ -336,6 +337,60 @@ describe("Tidy up, results", () => {
     fireEvent.click(view.ui.getByRole("button", { name: "Review" }))
     expect(await view.ui.findByRole("button", { name: "Save 4 and close 7 tabs" })).toBeTruthy()
   })
+
+  it("Save just this saves once, however fast it is clicked", async () => {
+    const chrome = reviewChrome()
+    const app = make(chrome)
+    await app.start()
+    const view = app.open(2)
+    await openReview(view)
+
+    fireEvent.click(view.ui.getByRole("button", { name: /^Finish reviewing the auth PR/ }))
+    const saveJustThis = view.ui.getByRole("button", { name: "Save just this" })
+    fireEvent.click(saveJustThis)
+    fireEvent.click(saveJustThis)
+    expect(await view.ui.findByText("Saved “Finish reviewing the auth PR” and closed 2 tabs.")).toBeTruthy()
+    // Give a second save the time to land, if one was sent.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(storedData(chrome, "items").map((item: any) => item.task)).toEqual(["The old thing", "Finish reviewing the auth PR"])
+  })
+
+  it("a review with nothing to save or close still finishes: Done marks it reviewed", async () => {
+    const run = {
+      id: "run-apps",
+      mode: "api",
+      model: "claude-opus-5-5",
+      startedAt: ISO_NOW(),
+      finishedAt: ISO_NOW(),
+      status: "succeeded",
+      tabs: [snapshot(16, 1, 0, "Inbox", "https://mail.google.com/mail/u/0", { sensitive: true })],
+      steps: [],
+      intentions: [intention("run-apps:0", "Mail", "app", [16])],
+      usage: { requests: 1, inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.001 }
+    }
+    const chrome = new FakeChrome({
+      tabs: [{ id: 16, windowId: 1, url: "https://mail.google.com/mail/u/0", title: "Inbox" }],
+      local: {
+        settings: SETTINGS,
+        runIndex: envelope([{ id: "run-apps", status: "succeeded" }]),
+        "run:run-apps": envelope(run)
+      }
+    })
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+    await openReview(view)
+
+    expect(view.ui.getByText("Nothing to tidy: your tabs are on your list already, or in everyday use.")).toBeTruthy()
+    const bar = view.ui.getByRole("button", { name: "Done" }) as HTMLButtonElement
+    expect(bar.disabled).toBe(false)
+    fireEvent.click(bar)
+    expect(await view.ui.findByText("Done.")).toBeTruthy()
+    expect(await view.ui.findByRole("heading", { level: 1, name: "Your list is empty" })).toBeTruthy()
+    expect(storedData(chrome, "run:run-apps").reviewedAt).toBeDefined()
+    expect(chrome.tabs.map((tab) => tab.id)).toEqual([16])
+    expect(view.ui.queryByText("Your tidy-up is ready")).toBeNull()
+  })
 })
 
 const RUN_TABS = [
@@ -442,6 +497,39 @@ describe("Tidy up, working", () => {
     expect(await second.ui.findByRole("heading", { level: 1, name: "Here’s what your tabs were for" })).toBeTruthy()
     expect(answers).toEqual([{ answers: [{ id: "q1", answer: "Mine" }] }])
   })
+
+  it("offers the questions again when an answer doesn't reach the panel running the tidy-up", async () => {
+    const model = new ScriptedModel([
+      callTools(toolCall("ask1", "ask_user", {
+        questions: [
+          question("q1", [1], "Is the auth PR yours?", ["Mine", "Someone else's"]),
+          question("q2", [2], "Still buying a desk?", ["Still deciding", "Bought it"])
+        ]
+      })),
+      never
+    ])
+    const app = make(runChrome(), model)
+    await app.start()
+    const first = app.open(1)
+    fireEvent.click(await first.ui.findByRole("button", { name: "Tidy up" }))
+    expect(await first.ui.findByRole("heading", { level: 2, name: "Is the auth PR yours?" })).toBeTruthy()
+
+    // The second panel mirrors the run from the Store, but its messages never reach the first.
+    Object.assign(app, { hub: new FakeRelayHub() })
+    const second = app.open(2)
+    fireEvent.click(await second.ui.findByRole("button", { name: "Show" }))
+    fireEvent.click(await second.ui.findByRole("button", { name: "Mine" }))
+    fireEvent.click(await second.ui.findByRole("button", { name: "Bought it" }))
+    expect(await second.ui.findByText("Thanks. Back to work…")).toBeTruthy()
+
+    // The relay times out (RELAY_TIMEOUT): the answer wasn't taken, so the questions come back.
+    expect(await second.ui.findByText("That question was already answered, or its tidy-up stopped.", {}, { timeout: 5000 }))
+      .toBeTruthy()
+    expect(await second.ui.findByRole("heading", { level: 2, name: "Is the auth PR yours?" })).toBeTruthy()
+    expect(second.ui.getByText("Question 1 of 2")).toBeTruthy()
+    expect(second.ui.queryByText("Thanks. Back to work…")).toBeNull()
+    expect(model.calls).toBe(1)
+  }, 10_000)
 
   it("answers from the second panel reach the run, and Stop there stops it", async () => {
     const answers: Array<unknown> = []

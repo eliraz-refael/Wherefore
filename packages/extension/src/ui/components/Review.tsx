@@ -122,7 +122,7 @@ function ReviewBody(
         <ClosingSummary model={model} plan={plan} />
       </main>
       <footer className="wf-savebar">
-        <button type="button" className="wf-primary" onClick={save} disabled={busy || nothing || saveBarLabel(plan) === "Nothing to save or close"}>
+        <button type="button" className="wf-primary" onClick={save} disabled={busy}>
           {saveBarLabel(plan)}
         </button>
         <span className="wf-savebar-note">Nothing is lost. You can undo.</span>
@@ -149,7 +149,16 @@ function ResultCard(props: {
   const count = result.tabs.length
   const meta = saved ? "Saved" : kept ? "Keeping open" : undefined
 
+  const [saving, setSaving] = useState(false)
+
   const change = (patch: ResultChoice) => act(updateChoice(run, result, patch))
+  const saveJustThis = async () => {
+    // One save per click: a second click before `savedAs` is set would save a duplicate item.
+    if (saving) return
+    setSaving(true)
+    await act(saveOne(run, result), (done) => done)
+    setSaving(false)
+  }
 
   return (
     <article className={expanded ? "wf-card wf-result wf-result-open" : "wf-card wf-result"}>
@@ -210,7 +219,7 @@ function ResultCard(props: {
                     {kept ? "Save these tabs instead" : "Keep these tabs open"}
                   </button>
                   {kept ? null : (
-                    <button type="button" className="wf-link-button" onClick={() => act(saveOne(run, result), (done) => done)}>
+                    <button type="button" className="wf-link-button" onClick={saveJustThis} disabled={saving}>
                       Save just this
                     </button>
                   )}

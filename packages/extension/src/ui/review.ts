@@ -222,7 +222,8 @@ export const saveBarLabel = (plan: Plan): string => {
   if (n > 0 && m > 0) return `Save ${n} and close ${m === 1 ? "1 tab" : `${m} tabs`}`
   if (n > 0) return `Save ${n}`
   if (m > 0) return `Close ${m === 1 ? "1 tab" : `${m} tabs`}`
-  return "Nothing to save or close"
+  // Nothing left to save or close: the bar still finishes the review, so it stops waiting.
+  return "Done"
 }
 
 /** "Gmail, Slack and 4 more": names for a summary line. */

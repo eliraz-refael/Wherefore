@@ -52,7 +52,7 @@ export class ItemNotFound extends Schema.TaggedError<ItemNotFound>()("ItemNotFou
 
 const StoreError = Schema.Union([StoreUnreadable, BrowserError])
 
-/** The fixed storage keys the user can reset after `StoreUnreadable` (run keys are pruned on their own). */
+/** The fixed storage keys the user can reset after `StoreUnreadable` (resetting `runIndex` also drops the runs it listed). */
 export const ResettableKey = Schema.Literals(["items", "settings", "runIndex"])
 export type ResettableKey = typeof ResettableKey.Type
 const ItemError = Schema.Union([ItemNotFound, StoreUnreadable, BrowserError])
