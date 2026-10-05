@@ -1,85 +1,12 @@
 import { assert, describe, expect, it } from "@effect/vitest"
 import { TabId, WindowId } from "@wherefore/core"
-import { Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
-import { WorkerLayer } from "../src/background/worker.ts"
+import { Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { PORT_NAME } from "../src/messaging/protocol.ts"
-import { listenForPorts, PortListener } from "../src/messaging/server.ts"
 import { PortConnector, WorkerClient } from "../src/messaging/WorkerClient.ts"
 import { itemsKey } from "../src/store/keys.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
-import { FakeOnConnect, type FakePort, portPair } from "./fakes/ports.ts"
-
-const ORIGIN = "chrome-extension://test-extension/"
-const PANEL_URL = `${ORIGIN}sidepanel.html`
-
-/** Lets queued Port messages (microtasks) and woken fibers run. */
-const settle = Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
-
-const waitUntil = (condition: () => boolean) =>
-  Effect.gen(function*() {
-    for (let i = 0; i < 200 && !condition(); i++) yield* settle
-    if (!condition()) return yield* Effect.die(new Error("condition never became true"))
-  })
-
-/** A worker that can be started, killed and started again over the same browser state, and a page. */
-class Harness {
-  readonly chrome: FakeChrome
-  private onConnect = new FakeOnConnect()
-  readonly pairs: Array<{ readonly page: FakePort; readonly worker: FakePort }> = []
-  private workerScope: Scope.Closeable | undefined
-
-  constructor(chrome: FakeChrome) {
-    this.chrome = chrome
-  }
-
-  readonly startWorker = Effect.suspend(() => {
-    // A new worker instance: new listeners, same storage and tabs.
-    this.onConnect = new FakeOnConnect()
-    const ports = listenForPorts(this.onConnect, ORIGIN)
-    return Effect.gen({ self: this }, function*() {
-      const scope = yield* Scope.make()
-      this.workerScope = scope
-      yield* Layer.buildWithScope(
-        WorkerLayer.pipe(Layer.provide([this.chrome.layer, Layer.succeed(PortListener)(ports)])),
-        scope
-      )
-    })
-  })
-
-  /** Chrome stops the worker: its Ports disconnect, its memory is gone. */
-  readonly killWorker = Effect.suspend(() => {
-    for (const { worker } of this.pairs) worker.disconnect()
-    const scope = this.workerScope
-    this.workerScope = undefined
-    return scope === undefined ? Effect.void : Scope.close(scope, Exit.void)
-  })
-
-  readonly connector: PortConnector["Service"] = {
-    connect: Effect.sync(() => {
-      const pair = portPair(PORT_NAME, PANEL_URL)
-      this.pairs.push(pair)
-      this.onConnect.fire(pair.worker)
-      return pair.page
-    })
-  }
-
-  get clientLayer(): Layer.Layer<WorkerClient> {
-    return WorkerClient.layerWith.pipe(Layer.provide(Layer.succeed(PortConnector)(this.connector)))
-  }
-
-  /** Fires a Port that wasn't opened by `WorkerClient`. */
-  rawPort(senderUrl: string): FakePort {
-    const pair = portPair(PORT_NAME, senderUrl)
-    this.onConnect.fire(pair.worker)
-    return pair.page
-  }
-}
-
-const withClient = <A, E>(harness: Harness, body: (client: WorkerClient["Service"]) => Effect.Effect<A, E>) =>
-  Effect.gen(function*() {
-    yield* harness.startWorker
-    return yield* Effect.flatMap(WorkerClient, body)
-  }).pipe(Effect.provide(harness.clientLayer), Effect.scoped)
+import { Harness, PANEL_URL, settle, waitUntil, withClient } from "./fakes/harness.ts"
+import { portPair } from "./fakes/ports.ts"
 
 const tabs = () =>
   new FakeChrome({

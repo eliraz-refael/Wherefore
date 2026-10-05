@@ -1,9 +1,9 @@
 import { assert, describe, expect, it } from "@effect/vitest"
-import { type SavedItem, SavedItemId } from "@wherefore/core"
+import { MAX_RUNS, Run, RunId, type SavedItem, SavedItemId } from "@wherefore/core"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { make as makeStore } from "../src/background/Store.ts"
-import { itemsKey, settingsKey } from "../src/store/keys.ts"
+import { itemsKey, runIndexKey, runKey, runKeyPrefix, settingsKey } from "../src/store/keys.ts"
 import type { StoreKey } from "../src/store/StoreKey.ts"
 import { StoreReader } from "../src/store/StoreReader.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
@@ -189,5 +189,161 @@ describe("StoreReader", () => {
       yield* chrome.api.storage.local.set({ settings: { version: 1, data: { apiKey: "" } } })
       const error = yield* Fiber.join(fiber)
       expect(error).toMatchObject({ _tag: "StoreUnreadable", key: "settings" })
+    }))
+})
+
+describe("Store runs: one key per run", () => {
+  const wireRun = (id: string, status = "running") => ({
+    id,
+    mode: "api",
+    model: "claude-opus-5-5",
+    startedAt: "2026-10-05T09:00:00.000Z",
+    ...(status === "running" ? {} : { finishedAt: "2026-10-05T09:05:00.000Z" }),
+    status,
+    tabs: [],
+    steps: [],
+    intentions: [],
+    usage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  })
+  const decodeRun = Schema.decodeUnknownSync(Run)
+  const run = (id: string, status = "running"): Run => decodeRun(wireRun(id, status))
+  const withNote = (r: Run, message: string): Run => ({
+    ...r,
+    steps: [...r.steps, { kind: "note", at: r.startedAt, message }]
+  })
+  const indexOf = (chrome: FakeChrome) => (chrome.local.get(runIndexKey.name) as { data: unknown } | undefined)?.data
+  const alive = (live: ReadonlyArray<string>) => (id: RunId) => Effect.succeed(live.includes(id))
+
+  it.effect("stores each run under its own key, and a step rewrites only that run", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const store = makeStore(chrome.api)
+      yield* store.saveRun(run("a"))
+      yield* store.saveRun(run("b"))
+      expect(chrome.local.get("run:a")).toEqual({ version: 1, data: wireRun("a") })
+      expect(indexOf(chrome)).toEqual([{ id: "a", status: "running" }, { id: "b", status: "running" }])
+
+      const b = chrome.local.get("run:b")
+      const index = chrome.local.get(runIndexKey.name)
+      yield* store.saveRun(withNote(run("a"), "step"))
+      expect(chrome.local.get("run:b")).toBe(b) // untouched
+      expect(chrome.local.get(runIndexKey.name)).toBe(index) // same status: the index isn't rewritten
+      expect(yield* store.read(runKey(RunId.make("a")))).toMatchObject({ steps: [{ message: "step" }] })
+
+      // A status change updates the index in the same write.
+      yield* store.saveRun(run("a", "succeeded"))
+      expect(indexOf(chrome)).toEqual([{ id: "a", status: "succeeded" }, { id: "b", status: "running" }])
+      expect(yield* store.read(runKey(RunId.make("zzz")))).toBeUndefined()
+    }))
+
+  it.effect(`keeps the newest ${MAX_RUNS} runs and removes the older run keys`, () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const store = makeStore(chrome.api)
+      for (let i = 0; i < MAX_RUNS + 2; i++) yield* store.saveRun(run(`r${i}`, "succeeded"))
+      const ids = (indexOf(chrome) as ReadonlyArray<{ id: string }>).map((entry) => entry.id)
+      expect(ids).toHaveLength(MAX_RUNS)
+      expect(ids[0]).toBe("r2")
+      expect(chrome.local.has("run:r0")).toBe(false)
+      expect(chrome.local.has("run:r1")).toBe(false)
+      expect([...chrome.local.keys()].filter((key) => key.startsWith(runKeyPrefix))).toHaveLength(MAX_RUNS)
+    }))
+
+  it.effect("marks runs whose page is gone, leaves live and finished ones alone, and writes nothing when there is nothing to do", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const store = makeStore(chrome.api)
+      yield* store.saveRun(run("gone"))
+      yield* store.saveRun(run("live"))
+      yield* store.saveRun(run("done", "succeeded"))
+      expect(yield* store.interruptRuns(alive(["live"]))).toEqual(["gone"])
+      expect(yield* store.read(runKey(RunId.make("gone")))).toMatchObject({ status: "interrupted" })
+      expect(indexOf(chrome)).toEqual([
+        { id: "gone", status: "interrupted" },
+        { id: "live", status: "running" },
+        { id: "done", status: "succeeded" }
+      ])
+      const writes = chrome.calls.filter((call) => call === "storage.local.set").length
+      expect(yield* store.interruptRuns(alive(["live"]))).toEqual([])
+      expect(chrome.calls.filter((call) => call === "storage.local.set")).toHaveLength(writes)
+    }))
+
+  it.effect("backs up an unreadable run and refuses it alone: the other runs keep working", () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(1_000)
+      const broken = { version: 1, data: { ...wireRun("bad"), status: "exploded" } }
+      const chrome = new FakeChrome({
+        local: {
+          "run:bad": broken,
+          "run:old": { version: 1, data: wireRun("old") },
+          runIndex: { version: 1, data: [{ id: "bad", status: "running" }, { id: "old", status: "running" }] }
+        }
+      })
+      const store = makeStore(chrome.api)
+
+      const errors = yield* store.migrateAll
+      expect(errors.map((e) => [e._tag, "key" in e ? e.key : "", "backupKey" in e ? e.backupKey : ""])).toEqual([
+        ["StoreUnreadable", "run:bad", "backup:run:bad:1000"]
+      ])
+      expect(chrome.local.get("backup:run:bad:1000")).toMatchObject({ raw: broken })
+
+      // The sweep skips the bad run and still marks the other one.
+      expect(yield* store.interruptRuns(alive([]))).toEqual(["old"])
+      expect(chrome.local.get("run:bad")).toEqual(broken)
+      // Its index entry no longer says "running", so the next sweep doesn't read it again.
+      expect(indexOf(chrome)).toEqual([{ id: "bad", status: "interrupted" }, { id: "old", status: "interrupted" }])
+      const reads = chrome.calls.length
+      expect(yield* store.interruptRuns(alive([]))).toEqual([])
+      expect(chrome.calls.slice(reads)).toEqual(["storage.local.get"])
+
+      // Saving over the bad run is refused; other runs save.
+      const refused = yield* Effect.flip(store.saveRun(run("bad")))
+      expect(refused).toMatchObject({ _tag: "StoreUnreadable", key: "run:bad" })
+      expect(chrome.local.get("run:bad")).toEqual(broken)
+      yield* store.saveRun(run("new"))
+      expect(yield* store.read(runKey(RunId.make("new")))).toMatchObject({ id: "new" })
+    }))
+
+  it.effect("StoreReader follows one run, or every run, and lists an unreadable run without hiding the others", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const reader = yield* Effect.provide(
+        Effect.gen(function*() {
+          return yield* StoreReader
+        }),
+        StoreReader.layer.pipe(Layer.provide(chrome.layer))
+      )
+      const store = makeStore(chrome.api)
+      yield* store.saveRun(run("a"))
+
+      const one = yield* reader.watch(runKey(RunId.make("a"))).pipe(
+        Stream.map((r) => r?.steps.length),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      const all = yield* reader.watchRuns.pipe(
+        Stream.map(({ runs, unreadable }) => `${runs.map((r) => `${r.id}:${r.status}`).join(",")}|${unreadable.length}`),
+        Stream.take(5),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      yield* Effect.yieldNow
+      yield* store.saveRun(withNote(run("a"), "one"))
+      yield* store.saveRun(run("b")) // another run: not seen by the one-run mirror
+      yield* store.saveRun(withNote(withNote(run("a"), "one"), "two"))
+      yield* chrome.api.storage.local.set({ "run:b": { version: 1, data: { id: "b" } } })
+      expect(yield* Fiber.join(one)).toEqual([0, 1, 2])
+      expect(yield* Fiber.join(all)).toEqual([
+        "a:running|0",
+        "a:running|0",
+        "a:running,b:running|0",
+        "a:running,b:running|0",
+        "a:running|1" // b can't be read: listed apart, a still shown
+      ])
+
+      const list = yield* reader.runs
+      expect(list.runs.map((r) => r.id)).toEqual(["a"])
+      expect(list.unreadable).toMatchObject([{ _tag: "StoreUnreadable", key: "run:b" }])
     }))
 })

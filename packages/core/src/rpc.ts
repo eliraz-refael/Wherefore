@@ -8,12 +8,14 @@
  *   companion can forward an MCP tool call to the worker without translating it.
  * - `TabRpcs`: closing with undo, and resuming an item as a tab group. Used by the UI only.
  * - `StoreRpcs`: every write to the user's items and settings.
+ * - `RunRpcs`: persisting triage runs step by step, and marking runs whose page went away.
  *
  * `ask_user` and `submit_intentions` are not here: they are answered where the run lives (the page
  * in API mode), not in the worker.
  */
 import { Schema } from "effect"
 import { SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
+import { Run } from "./run.ts"
 import { RemovedItem, SavedItem } from "./savedItem.ts"
 import { Settings } from "./settings.ts"
 import { ListTabs, ReadPages, ToolError, WakeAndReadPages } from "./tools.ts"
@@ -141,5 +143,19 @@ export const StoreRpcs = RpcGroup.make(
   Rpc.make("update_settings", { payload: { settings: Settings }, success: Settings, error: StoreError })
 )
 
+// ---------- runs ----------
+
+export const RunRpcs = RpcGroup.make(
+  /**
+   * Stores a run under its own key: replaces the stored run with the same id, or adds it (keeping
+   * the newest `MAX_RUNS`; older runs are deleted). The page running it calls this after every
+   * step; it is idempotent, so it is safe to retry. Also marks other runs interrupted when their
+   * page is gone.
+   */
+  Rpc.make("save_run", { payload: { run: Run }, error: StoreError }),
+  /** Marks every stored run that is still "running" but whose page is gone as interrupted. */
+  Rpc.make("check_runs", { error: StoreError })
+)
+
 /** Everything the worker serves to extension pages. */
-export const WorkerRpcs = TabToolRpcs.merge(TabRpcs, StoreRpcs)
+export const WorkerRpcs = TabToolRpcs.merge(TabRpcs, StoreRpcs, RunRpcs)

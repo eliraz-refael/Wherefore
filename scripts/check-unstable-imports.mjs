@@ -3,6 +3,8 @@
  * Fails when a file in packages/<pkg>/src or packages/<pkg>/test imports `effect/unstable/*`
  * anywhere but that package's own src/unstable.ts (architecture A1: unstable Effect modules sit
  * behind one re-export file per package, so moving to Effect 4.0.0's paths changes one file).
+ * `@effect/ai-anthropic` is held to the same rule: it is built on `effect/unstable/ai` and moves
+ * with it.
  *
  * Catches static imports and re-exports (`from "..."`), side-effect imports, dynamic `import()`
  * and `require()`. Plain Node, no dependencies, no shell: runs the same on Linux, macOS and Windows.
@@ -17,8 +19,10 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/
 const SCANNED_DIRS = ["src", "test"]
 const ALLOWED = join("src", "unstable.ts")
 
-// `from "x"`, `import "x"`, `import("x")`, `require("x")`, where x is effect/unstable or below it.
-const UNSTABLE_IMPORT = /\b(?:from|import|require)\s*\(?\s*(["'`])(effect\/unstable(?:\/[^"'`\s]*)?)\1/g
+// `from "x"`, `import "x"`, `import("x")`, `require("x")`, where x is effect/unstable or
+// @effect/ai-anthropic, or below either.
+const UNSTABLE_IMPORT =
+  /\b(?:from|import|require)\s*\(?\s*(["'`])((?:effect\/unstable|@effect\/ai-anthropic)(?:\/[^"'`\s]*)?)\1/g
 
 /** Every source file under `dir`, skipping node_modules. */
 function* sourceFiles(dir) {
@@ -59,7 +63,7 @@ for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
 }
 
 if (violations.length > 0) {
-  console.error("effect/unstable/* may only be imported from each package's src/unstable.ts:\n")
+  console.error("effect/unstable/* and @effect/ai-anthropic may only be imported from each package's src/unstable.ts:\n")
   for (const violation of violations) console.error(`  ${violation}`)
   console.error("\nRe-export what you need from that package's src/unstable.ts and import it from there.")
   process.exit(1)

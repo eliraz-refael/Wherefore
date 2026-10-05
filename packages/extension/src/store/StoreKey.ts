@@ -5,7 +5,7 @@
  * Reading decodes the envelope, runs the key's migrations from the stored version up to the
  * current one (on the stored JSON form), then decodes `data` with the key's schema.
  *
- * Adding a key (e.g. `runs` in PR 3) is one `StoreKey` value in keys.ts. Changing a key's shape is:
+ * Adding a key is one `StoreKey` value in keys.ts. Changing a key's shape is:
  * bump `version`, add `migrations[oldVersion]`, update the schema.
  */
 import { Result, Schema } from "effect"
