@@ -3,11 +3,12 @@
  * over the same tabs and storage, pages that talk to it over fake Ports, and the Web Locks the
  * pages and the worker share.
  */
+import type { Run } from "@wherefore/core"
 import { Effect, Exit, Layer, Scope } from "effect"
 import { WorkerLayer } from "../../src/background/worker.ts"
 import { PORT_NAME } from "../../src/messaging/protocol.ts"
 import { listenForPorts, PortListener } from "../../src/messaging/server.ts"
-import { PortConnector, WorkerClient } from "../../src/messaging/WorkerClient.ts"
+import { PortConnector, WorkerClient, type WorkerRpcTag, WorkerUnavailable } from "../../src/messaging/WorkerClient.ts"
 import type { FakeChrome } from "./chrome.ts"
 import { FakeLockManager } from "./locks.ts"
 import { FakeOnConnect, type FakePort, portPair } from "./ports.ts"
@@ -30,6 +31,11 @@ export class Harness {
   private onConnect = new FakeOnConnect()
   readonly pairs: Array<{ readonly page: FakePort; readonly worker: FakePort }> = []
   private workerScope: Scope.Closeable | undefined
+  /**
+   * Fault hook: a page's `save_run` call fails with `WorkerUnavailable`, without reaching the
+   * worker, while this returns true for the run being saved.
+   */
+  failSaveRun: ((run: Run) => boolean) | undefined = undefined
 
   constructor(chrome: FakeChrome) {
     this.chrome = chrome
@@ -69,7 +75,20 @@ export class Harness {
   }
 
   get clientLayer(): Layer.Layer<WorkerClient> {
-    return WorkerClient.layerWith.pipe(Layer.provide(Layer.succeed(PortConnector)(this.connector)))
+    const real = WorkerClient.layerWith.pipe(Layer.provide(Layer.succeed(PortConnector)(this.connector)))
+    const faulty = Layer.effect(WorkerClient)(Effect.gen({ self: this }, function*() {
+      const client = yield* WorkerClient
+      // Decided per attempt, so a retry of the same call can go through. The generic call's
+      // conditional return type doesn't resolve inside a wrapper, so it is re-typed once here.
+      const call = (tag: WorkerRpcTag, payload: unknown) =>
+        Effect.suspend(() =>
+          tag === "save_run" && this.failSaveRun?.((payload as { readonly run: Run }).run) === true
+            ? Effect.fail(new WorkerUnavailable({ message: "fault injected by the test" }))
+            : client.call(tag, payload as never)
+        )
+      return WorkerClient.of({ call: call as WorkerClient["Service"]["call"] })
+    }))
+    return faulty.pipe(Layer.provide(real))
   }
 
   /** Fires a Port that wasn't opened by `WorkerClient`. */

@@ -443,6 +443,23 @@ describe("interrupted runs", () => {
       }))
   })
 
+  it.effect("a final save that misses the worker twice is retried, so a finished run is never marked interrupted", () => {
+    const harness = new Harness(browser())
+    const model = new ScriptedModel([callTools(toolCall("submit", "submit_intentions", { intentions: allThree }))])
+    let failures = 0
+    harness.failSaveRun = (run) => run.status !== "running" && failures++ < 2
+    return inPage(harness, model, (agent) =>
+      Effect.gen(function*() {
+        const run = yield* runToEnd(agent)
+        expect(run.status).toBe("succeeded")
+        // The lock is released after the final save, and a sweep then leaves the run alone.
+        yield* waitUntil(() => harness.locks.heldNames().length === 0)
+        yield* (yield* WorkerClient).call("check_runs", undefined)
+        expect(storedRuns(harness).map((stored) => [stored.id, stored.status])).toEqual([[run.id, "succeeded"]])
+        expect(failures).toBe(3) // two failed attempts, then the one that went through
+      }))
+  })
+
   it.effect("a mirror following the Store sees the run step by step until it ends", () => {
     const harness = new Harness(browser())
     const model = new ScriptedModel([callTools(toolCall("submit", "submit_intentions", { intentions: allThree }))])
