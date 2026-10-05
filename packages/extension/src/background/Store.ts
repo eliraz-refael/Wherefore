@@ -9,6 +9,11 @@
  * Writes are read-modify-write under one lock, so concurrent RPCs can't lose each other's
  * updates; a change that returns the value it was given writes nothing. Item and run operations
  * are core's pure helpers (savedItem.ts, run.ts).
+ *
+ * Each run has its own key (`run:<id>`), so a step rewrites one run, not all of them. The run
+ * index (`runIndex`: ids and statuses, oldest first) is written in the same `set` as the run when
+ * the run is new or its status changes; pruning and the interrupted-run sweep read it. An
+ * unreadable run is backed up and refused on its own: the other runs keep working.
  */
 import {
   type BrowserError,
@@ -21,15 +26,16 @@ import {
   restoreItem,
   type Run,
   type RunId,
+  type RunIndexEntry,
   type SavedItem,
   type SavedItemId,
   type Settings,
   StoreUnreadable,
-  upsertRun
+  upsertRunIndex
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { itemsKey, runsKey, settingsKey, storeKeys } from "../store/keys.ts"
+import { itemsKey, runIndexKey, runKey, settingsKey, storeKeys } from "../store/keys.ts"
 import { decodeStored, encodeStored, type StoreKey } from "../store/StoreKey.ts"
 
 export type StoreError = StoreUnreadable | BrowserError
@@ -47,7 +53,10 @@ export interface Backup {
 
 export class Store extends Context.Service<Store, {
   readonly read: <A>(key: StoreKey<A>) => Effect.Effect<A, StoreError>
-  /** Reads every key once, so old versions are migrated and unreadable values backed up at startup. */
+  /**
+   * Reads every key once (every run in the index too), so old versions are migrated and
+   * unreadable values backed up at startup.
+   */
   readonly migrateAll: Effect.Effect<ReadonlyArray<StoreError>>
   /** Adds items; an item whose id is already saved replaces it in place. */
   readonly saveItems: (items: ReadonlyArray<SavedItem>) => Effect.Effect<void, StoreError>
@@ -56,11 +65,15 @@ export class Store extends Context.Service<Store, {
   readonly removeItem: (id: SavedItemId) => Effect.Effect<RemovedItem, ItemNotFound | StoreError>
   readonly restoreItem: (removed: RemovedItem) => Effect.Effect<void, StoreError>
   readonly updateSettings: (settings: Settings) => Effect.Effect<Settings, StoreError>
-  /** Stores a run: replaces the one with the same id, or adds it, keeping the newest `MAX_RUNS`. */
+  /**
+   * Stores a run under its own key: replaces the one with the same id, or adds it, keeping the
+   * newest `MAX_RUNS` (older run keys are removed). Fails if the stored copy of this run, or the
+   * index, can't be read.
+   */
   readonly saveRun: (run: Run) => Effect.Effect<void, StoreError>
   /**
    * Marks every "running" run whose page is gone (`isLive` says false) as interrupted, except
-   * `except`. Returns the ids it marked.
+   * `except`. Returns the ids it marked. A run that can't be read is backed up and skipped.
    */
   readonly interruptRuns: (
     isLive: (id: RunId) => Effect.Effect<boolean>,
@@ -132,11 +145,69 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
       return result
     }).pipe(Semaphore.withPermit(lock))
 
-  const migrateAll = Effect.forEach(storeKeys, (key) =>
-    Effect.match(read(key), {
+  const errorsOf = (effect: Effect.Effect<unknown, StoreError>) =>
+    Effect.match(effect, {
       onFailure: (error): ReadonlyArray<StoreError> => [error],
       onSuccess: (): ReadonlyArray<StoreError> => []
-    })).pipe(Effect.map((errors) => errors.flat()))
+    })
+
+  const migrateAll = Effect.gen(function*() {
+    const errors = yield* Effect.forEach(storeKeys, (key) => errorsOf(read(key)))
+    // An unreadable index is already in `errors`.
+    const index = yield* Effect.option(read(runIndexKey))
+    const runErrors = index._tag === "Some"
+      ? yield* Effect.forEach(index.value, (entry) => errorsOf(read(runKey(entry.id))))
+      : []
+    return [...errors, ...runErrors].flat()
+  })
+
+  const saveRun = (run: Run) =>
+    Effect.gen(function*() {
+      const key = runKey(run.id)
+      const index = yield* readUnlocked(runIndexKey)
+      // Never overwrite a stored copy that can't be read (the read backs it up).
+      yield* readUnlocked(key)
+      const next = upsertRunIndex(index, { id: run.id, status: run.status })
+      yield* local.set({
+        [key.name]: encodeStored(key, run),
+        ...(next.index === index ? {} : { [runIndexKey.name]: encodeStored(runIndexKey, next.index) })
+      })
+      if (next.dropped.length > 0) yield* local.remove(next.dropped.map((id) => runKey(id).name))
+    }).pipe(Semaphore.withPermit(lock))
+
+  const interruptRuns = (isLive: (id: RunId) => Effect.Effect<boolean>, except?: RunId) =>
+    Effect.gen(function*() {
+      const index = yield* readUnlocked(runIndexKey)
+      const writes: Record<string, unknown> = {}
+      const marked: Array<RunId> = []
+      let nextIndex: ReadonlyArray<RunIndexEntry> = index
+      for (const entry of index) {
+        if (entry.status !== "running" || entry.id === except || (yield* isLive(entry.id))) continue
+        const key = runKey(entry.id)
+        // An unreadable run is backed up by the read and skipped; the others are still checked.
+        const stored = yield* readUnlocked(key).pipe(
+          Effect.map(Option.some),
+          Effect.catchTag("StoreUnreadable", () => Effect.succeed(Option.none<Run | undefined>()))
+        )
+        if (stored._tag === "None") continue
+        const run = stored.value
+        if (run === undefined) {
+          // The index names a run that isn't stored: drop the entry.
+          nextIndex = nextIndex.filter((e) => e.id !== entry.id)
+          continue
+        }
+        const interrupted = interruptRun(run, yield* DateTime.now)
+        if (interrupted !== run) {
+          writes[key.name] = encodeStored(key, interrupted)
+          marked.push(run.id)
+        }
+        nextIndex = upsertRunIndex(nextIndex, { id: run.id, status: interrupted.status }).index
+      }
+      if (nextIndex !== index) writes[runIndexKey.name] = encodeStored(runIndexKey, nextIndex)
+      if (Object.keys(writes).length > 0) yield* local.set(writes)
+      if (marked.length > 0) yield* Effect.logInfo(`Store: marked ${marked.length} run(s) interrupted: their page is gone`)
+      return marked
+    }).pipe(Semaphore.withPermit(lock))
 
   const updateItem = (id: SavedItemId, change: (item: SavedItem, now: DateTime.Utc) => SavedItem) =>
     update(itemsKey, (items) =>
@@ -169,18 +240,7 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
         })),
     restoreItem: (removed) => update(itemsKey, (items) => Effect.succeed([undefined, restoreItem(items, removed)] as const)),
     updateSettings: (settings) => update(settingsKey, () => Effect.succeed([settings, settings] as const)),
-    saveRun: (run) => update(runsKey, (runs) => Effect.succeed([undefined, upsertRun(runs, run)] as const)),
-    interruptRuns: (isLive, except) =>
-      update(runsKey, (runs) =>
-        Effect.gen(function*() {
-          const stale: Array<RunId> = []
-          for (const run of runs) {
-            if (run.status === "running" && run.id !== except && !(yield* isLive(run.id))) stale.push(run.id)
-          }
-          if (stale.length === 0) return [stale, runs] as const
-          const now = yield* DateTime.now
-          yield* Effect.logInfo(`Store: marked ${stale.length} run(s) interrupted: their page is gone`)
-          return [stale, runs.map((run) => (stale.includes(run.id) ? interruptRun(run, now) : run))] as const
-        }))
+    saveRun,
+    interruptRuns
   }
 }

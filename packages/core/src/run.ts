@@ -162,11 +162,34 @@ export type Run = typeof Run.Type
 /** How many runs the extension keeps. Older ones are dropped. */
 export const MAX_RUNS = 10
 
-/** Replaces the run with the same id in place, or appends it; then keeps only the newest `max`. */
-export const upsertRun = (runs: ReadonlyArray<Run>, run: Run, max: number = MAX_RUNS): ReadonlyArray<Run> => {
-  const index = runs.findIndex((existing) => existing.id === run.id)
-  const next = index === -1 ? [...runs, run] : runs.map((existing, i) => (i === index ? run : existing))
-  return next.slice(Math.max(0, next.length - max))
+/**
+ * One stored run in the run index: the extension keeps the runs in order, and their status, so it
+ * can prune old runs and find runs left "running" without reading every run.
+ */
+export const RunIndexEntry = Schema.Struct({
+  id: RunId,
+  status: RunStatus
+})
+export type RunIndexEntry = typeof RunIndexEntry.Type
+
+/**
+ * Records `entry` in the index, oldest first: updates the entry with the same id in place, or
+ * appends it; then keeps only the newest `max`. Returns the index it was given when nothing
+ * changed, and the ids it dropped.
+ */
+export const upsertRunIndex = (
+  index: ReadonlyArray<RunIndexEntry>,
+  entry: RunIndexEntry,
+  max: number = MAX_RUNS
+): { readonly index: ReadonlyArray<RunIndexEntry>; readonly dropped: ReadonlyArray<RunId> } => {
+  const at = index.findIndex((existing) => existing.id === entry.id)
+  if (at !== -1) {
+    if (index[at]?.status === entry.status) return { index, dropped: [] }
+    return { index: index.map((existing, i) => (i === at ? entry : existing)), dropped: [] }
+  }
+  const next = [...index, entry]
+  const cut = Math.max(0, next.length - max)
+  return { index: next.slice(cut), dropped: next.slice(0, cut).map((dropped) => dropped.id) }
 }
 
 export const INTERRUPTED_MESSAGE = "The window running this tidy-up was closed before it finished."

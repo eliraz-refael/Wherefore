@@ -8,7 +8,8 @@ import {
   MAX_RUNS,
   Run,
   RunId,
-  upsertRun
+  type RunIndexEntry,
+  upsertRunIndex
 } from "../src/index.ts"
 import { decodeOk, encodeOk, rejects } from "./helpers.ts"
 
@@ -71,23 +72,35 @@ describe("Run", () => {
   })
 })
 
-describe("upsertRun", () => {
-  const base = decodeOk(Run, wireRun)
-  const withId = (id: string): Run => ({ ...base, id: RunId.make(id) })
+describe("upsertRunIndex", () => {
+  const entry = (id: string, status: RunIndexEntry["status"] = "running"): RunIndexEntry => ({ id: RunId.make(id), status })
 
-  it("replaces a run with the same id in place, or appends a new one", () => {
-    const runs = [withId("a"), withId("b")]
-    const changed = { ...withId("a"), model: "other" }
-    expect(upsertRun(runs, changed).map((run) => [run.id, run.model])).toEqual([["a", "other"], ["b", base.model]])
-    expect(upsertRun(runs, withId("c")).map((run) => run.id)).toEqual(["a", "b", "c"])
+  it("updates an entry with the same id in place, or appends a new one", () => {
+    const index = [entry("a"), entry("b")]
+    expect(upsertRunIndex(index, entry("a", "succeeded"))).toEqual({
+      index: [entry("a", "succeeded"), entry("b")],
+      dropped: []
+    })
+    expect(upsertRunIndex(index, entry("c")).index.map((e) => e.id)).toEqual(["a", "b", "c"])
   })
 
-  it(`keeps only the newest ${MAX_RUNS}`, () => {
-    let runs: ReadonlyArray<Run> = []
-    for (let i = 0; i < MAX_RUNS + 3; i++) runs = upsertRun(runs, withId(`r${i}`))
-    expect(runs).toHaveLength(MAX_RUNS)
-    expect(runs[0]?.id).toBe("r3")
-    expect(runs.at(-1)?.id).toBe(`r${MAX_RUNS + 2}`)
+  it("returns the same index when nothing changed", () => {
+    const index = [entry("a"), entry("b")]
+    expect(upsertRunIndex(index, entry("b")).index).toBe(index)
+  })
+
+  it(`keeps only the newest ${MAX_RUNS} and says which ids it dropped`, () => {
+    let index: ReadonlyArray<RunIndexEntry> = []
+    const dropped: Array<string> = []
+    for (let i = 0; i < MAX_RUNS + 3; i++) {
+      const next = upsertRunIndex(index, entry(`r${i}`))
+      index = next.index
+      dropped.push(...next.dropped)
+    }
+    expect(index).toHaveLength(MAX_RUNS)
+    expect(index[0]?.id).toBe("r3")
+    expect(index.at(-1)?.id).toBe(`r${MAX_RUNS + 2}`)
+    expect(dropped).toEqual(["r0", "r1", "r2"])
   })
 })
 

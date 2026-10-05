@@ -147,9 +147,10 @@ export const StoreRpcs = RpcGroup.make(
 
 export const RunRpcs = RpcGroup.make(
   /**
-   * Stores a run: replaces the stored run with the same id, or adds it (keeping the newest
-   * `MAX_RUNS`). The page running it calls this after every step; it is idempotent, so it is safe
-   * to retry. Also marks other runs interrupted when their page is gone.
+   * Stores a run under its own key: replaces the stored run with the same id, or adds it (keeping
+   * the newest `MAX_RUNS`; older runs are deleted). The page running it calls this after every
+   * step; it is idempotent, so it is safe to retry. Also marks other runs interrupted when their
+   * page is gone.
    */
   Rpc.make("save_run", { payload: { run: Run }, error: StoreError }),
   /** Marks every stored run that is still "running" but whose page is gone as interrupted. */

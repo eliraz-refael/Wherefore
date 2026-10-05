@@ -32,6 +32,6 @@ export type QuestionId = typeof QuestionId.Type
 export const UndoToken = Schema.NonEmptyString.pipe(Schema.brand("UndoToken"))
 export type UndoToken = typeof UndoToken.Type
 
-/** Identifies one triage run, e.g. in the stored `runs` list. */
+/** Identifies one triage run, e.g. in its storage key `run:<id>`. */
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type

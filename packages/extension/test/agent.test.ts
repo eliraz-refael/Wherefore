@@ -9,7 +9,7 @@ import { TestClock } from "effect/testing"
 import { type Inbox, QuestionsInbox } from "../src/agent/Questions.ts"
 import { type RunHandle, SKIPPED_ANSWER, TriageAgent } from "../src/agent/TriageAgent.ts"
 import { WorkerClient } from "../src/messaging/WorkerClient.ts"
-import { runsKey } from "../src/store/keys.ts"
+import { runIndexKey, runKey } from "../src/store/keys.ts"
 import { StoreReader } from "../src/store/StoreReader.ts"
 import { AiError } from "../src/unstable.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
@@ -52,8 +52,17 @@ const intention = (title: string, tabIds: ReadonlyArray<number>, kind = "decide"
 
 const allThree = [intention("Finish the auth PR", [1], "done"), intention("Decide between two desks", [2, 3])]
 
+const storedData = (harness: Harness, name: string): unknown =>
+  (harness.chrome.local.get(name) as { data: unknown } | undefined)?.data
+
+/** The stored runs, in index order, read straight from storage. */
 const storedRuns = (harness: Harness): ReadonlyArray<Run> =>
-  Schema.decodeUnknownSync(runsKey.schema)((harness.chrome.local.get("runs") as { data: unknown } | undefined)?.data ?? [])
+  Schema.decodeUnknownSync(runIndexKey.schema)(storedData(harness, runIndexKey.name) ?? []).map((entry) => {
+    const run = Schema.decodeUnknownSync(runKey(entry.id).schema)(storedData(harness, runKey(entry.id).name))
+    if (run === undefined) throw new Error(`run ${entry.id} is indexed but not stored`)
+    expect(entry.status).toBe(run.status) // the index keeps each run's status
+    return run
+  })
 
 /** A page: the agent, its Questions inbox, and a client of the shared lock manager. */
 const inPage = <A, E>(
@@ -394,8 +403,13 @@ describe("interrupted runs", () => {
     usage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
   }
 
+  const leftBehind = {
+    "run:run-old": { version: 1, data: leftRunning },
+    runIndex: { version: 1, data: [{ id: "run-old", status: "running" }] }
+  }
+
   it.effect("a run left running by a closed page is marked interrupted when the worker starts", () => {
-    const harness = new Harness(browser({ local: { runs: { version: 1, data: [leftRunning] } } }))
+    const harness = new Harness(browser({ local: leftBehind }))
     return Effect.gen(function*() {
       yield* harness.startWorker
       const [run] = storedRuns(harness)
@@ -434,7 +448,7 @@ describe("interrupted runs", () => {
     return inPage(harness, model, (agent) =>
       Effect.gen(function*() {
         // Written after the worker started, as if a page had closed while the worker ran.
-        harness.chrome.local.set("runs", { version: 1, data: [leftRunning] })
+        for (const [name, value] of Object.entries(leftBehind)) harness.chrome.local.set(name, value)
         const run = yield* runToEnd(agent)
         expect(storedRuns(harness).map((stored) => [stored.id, stored.status])).toEqual([
           ["run-old", "interrupted"],
@@ -466,8 +480,8 @@ describe("interrupted runs", () => {
     return inPage(harness, model, (agent) =>
       Effect.gen(function*() {
         const reader = yield* StoreReader
-        const seen = yield* reader.watch(runsKey).pipe(
-          Stream.map((runs) => runs.at(-1)),
+        const seen = yield* reader.watchRuns.pipe(
+          Stream.map(({ runs }) => runs.at(-1)),
           Stream.filter((run) => run !== undefined),
           Stream.takeUntil((run) => run.status !== "running"),
           Stream.map((run) => `${run.status}:${run.steps.length}`),
