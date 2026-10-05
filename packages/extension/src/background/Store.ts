@@ -184,12 +184,17 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
       for (const entry of index) {
         if (entry.status !== "running" || entry.id === except || (yield* isLive(entry.id))) continue
         const key = runKey(entry.id)
-        // An unreadable run is backed up by the read and skipped; the others are still checked.
+        // An unreadable run is backed up by the read and skipped; the others are still checked. Its
+        // page is gone, so its index entry stops saying "running": later sweeps (one per saved step)
+        // don't read it and back it up again.
         const stored = yield* readUnlocked(key).pipe(
           Effect.map(Option.some),
           Effect.catchTag("StoreUnreadable", () => Effect.succeed(Option.none<Run | undefined>()))
         )
-        if (stored._tag === "None") continue
+        if (stored._tag === "None") {
+          nextIndex = upsertRunIndex(nextIndex, { id: entry.id, status: "interrupted" }).index
+          continue
+        }
         const run = stored.value
         if (run === undefined) {
           // The index names a run that isn't stored: drop the entry.

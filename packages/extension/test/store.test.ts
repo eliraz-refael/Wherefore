@@ -290,6 +290,11 @@ describe("Store runs: one key per run", () => {
       // The sweep skips the bad run and still marks the other one.
       expect(yield* store.interruptRuns(alive([]))).toEqual(["old"])
       expect(chrome.local.get("run:bad")).toEqual(broken)
+      // Its index entry no longer says "running", so the next sweep doesn't read it again.
+      expect(indexOf(chrome)).toEqual([{ id: "bad", status: "interrupted" }, { id: "old", status: "interrupted" }])
+      const reads = chrome.calls.length
+      expect(yield* store.interruptRuns(alive([]))).toEqual([])
+      expect(chrome.calls.slice(reads)).toEqual(["storage.local.get"])
 
       // Saving over the bad run is refused; other runs save.
       const refused = yield* Effect.flip(store.saveRun(run("bad")))
