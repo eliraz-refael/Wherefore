@@ -2,7 +2,14 @@
 
 The Wherefore Chrome extension (MV3, built with [WXT](https://wxt.dev)). See [architecture.md](../../docs/product/architecture.md).
 
-**Status: M1, PR 3.** The service worker serves tab tools (list, read, wake, close with undo, resume as a group) and every storage write to the extension's pages over RPC. The API-mode agent (`src/agent/`) runs a triage in the page and stores every step; it is covered by tests but not wired to any screen yet. The side panel is still a placeholder; the real UI comes next.
+**Status: M1 done (API mode).** The side panel works end to end with your own Anthropic API key: first run, Your list (Done, Open, edit, remove with undo), Tidy up (progress, questions one at a time, results with the "Save N and close M tabs" bar and undo), the Done archive and Settings. The service worker serves tab tools and every storage write over RPC; the API-mode agent (`src/agent/`) runs in the page and stores every step, so a second panel mirrors a run.
+
+## Try it
+
+1. Build and load it (below). Remove the POC first: they share an extension ID.
+2. Click the toolbar icon. The side panel asks for an Anthropic API key ([console.anthropic.com](https://console.anthropic.com/settings/keys)). It stays in `chrome.storage.local`; Settings shows only its last four characters.
+3. **Tidy up** reads your open tabs (titles and redacted URLs; page text only when the model asks, never for mail, chat, consoles or sign-in pages), may ask a question or two, then shows the results. **Save N and close M tabs** saves them to Your list and closes the tabs; **Undo** in the toast brings everything back.
+4. On Your list, **Open** brings an item's tabs back as a tab group; **Done** closes them and moves the item to the Done archive.
 
 ## Build and load
 
@@ -23,7 +30,8 @@ Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → `p
 |---|---|
 | `wxt.config.ts` | Manifest (name, key, permissions) and build settings |
 | `src/entrypoints/background.ts` | Service worker: wires the layers below |
-| `src/entrypoints/sidepanel/` | Side panel (React 19, `@effect/atom-react`) |
+| `src/entrypoints/sidepanel/` | The side panel's page: mounts `src/ui/` |
+| `src/ui/` | Views (side panel now, full page in M3): Atoms over `StoreReader`/`PageTabs` (`atoms.ts`), actions through the worker (`actions.ts`), the review model (`review.ts`), `Tidy` (runs, and answers/Stop across panels), React components and `styles.css` |
 | `src/chrome/ChromeApi.ts` | The seam around every `chrome.*` call the services make (faked in tests) |
 | `src/background/TabTools.ts` | List, read and wake tabs; close with undo; reopen an item as a tab group |
 | `src/background/Store.ts` | Storage writes: versioned keys, migrations, backups of unreadable values |
