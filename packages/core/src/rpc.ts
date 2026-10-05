@@ -14,7 +14,7 @@
  * in API mode), not in the worker.
  */
 import { Schema } from "effect"
-import { SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
+import { RunId, SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
 import { Run } from "./run.ts"
 import { RemovedItem, SavedItem } from "./savedItem.ts"
 import { Settings } from "./settings.ts"
@@ -51,6 +51,10 @@ export class ItemNotFound extends Schema.TaggedError<ItemNotFound>()("ItemNotFou
 }) {}
 
 const StoreError = Schema.Union([StoreUnreadable, BrowserError])
+
+/** The fixed storage keys the user can reset after `StoreUnreadable` (run keys are pruned on their own). */
+export const ResettableKey = Schema.Literals(["items", "settings", "runIndex"])
+export type ResettableKey = typeof ResettableKey.Type
 const ItemError = Schema.Union([ItemNotFound, StoreUnreadable, BrowserError])
 
 // ---------- the model's worker-side tools ----------
@@ -140,7 +144,17 @@ export const StoreRpcs = RpcGroup.make(
   Rpc.make("remove_item", { payload: { id: SavedItemId }, success: RemovedItem, error: ItemError }),
   Rpc.make("restore_item", { payload: { removed: RemovedItem }, error: StoreError }),
   /** Replaces the settings. Returns them as stored. */
-  Rpc.make("update_settings", { payload: { settings: Settings }, success: Settings, error: StoreError })
+  Rpc.make("update_settings", { payload: { settings: Settings }, success: Settings, error: StoreError }),
+  /**
+   * Recovers a key that can't be read (`StoreUnreadable`): its raw value is kept in a backup key
+   * (made now if the worker hasn't made one yet), then the key starts over empty. Returns the
+   * backup's key; null when the value was readable, in which case nothing changes.
+   */
+  Rpc.make("reset_store_key", {
+    payload: { key: ResettableKey },
+    success: Schema.Struct({ backupKey: Schema.NullOr(Schema.String) }),
+    error: BrowserError
+  })
 )
 
 // ---------- runs ----------
@@ -154,7 +168,12 @@ export const RunRpcs = RpcGroup.make(
    */
   Rpc.make("save_run", { payload: { run: Run }, error: StoreError }),
   /** Marks every stored run that is still "running" but whose page is gone as interrupted. */
-  Rpc.make("check_runs", { error: StoreError })
+  Rpc.make("check_runs", { error: StoreError }),
+  /**
+   * Records that the user finished reviewing a run's result (`reviewed: true`), or undoes that.
+   * A run that is no longer stored is ignored.
+   */
+  Rpc.make("set_run_reviewed", { payload: { id: RunId, reviewed: Schema.Boolean }, error: StoreError })
 )
 
 /** Everything the worker serves to extension pages. */
