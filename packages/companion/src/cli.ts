@@ -18,7 +18,7 @@ import { connectBroker } from "./broker/BrokerClient.ts"
 import { callerOf, runNativeHost } from "./broker/nativeHost.ts"
 import { liveDeps, makeRegistry } from "./broker/registry.ts"
 import { applyInstall, applyUninstall, installedHosts, runCommand } from "./install/apply.ts"
-import { planInstall, planUninstall, wrapperPath } from "./install/plan.ts"
+import { planInstall, planUninstall, stableNode, wrapperPath } from "./install/plan.ts"
 import { type Location, platformOf, registryDir } from "./paths.ts"
 import {
   Command,
@@ -36,12 +36,23 @@ const location = (): Location => ({ platform: platformOf(process.platform), home
 /** This file, as installed: the wrapper script runs it. */
 const cliPath = () => realpathSync(process.argv[1] ?? "")
 
+/** The Node to pin in the wrapper: a stable `PATH` entry for this binary when there is one (plan.ts). */
+const nodePath = (where: Location) =>
+  stableNode(where.platform, process.execPath, process.env["PATH"], (path) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return undefined
+    }
+  })
+
 const pad = (text: string, width: number) => text.padEnd(width)
 
 const install = Command.make("install", {}, () =>
   Effect.gen(function*() {
     const where = location()
-    const plan = planInstall(where, { node: process.execPath, cli: cliPath(), env: process.env }, existsSync)
+    const node = nodePath(where)
+    const plan = planInstall(where, { node, cli: cliPath(), env: process.env }, existsSync)
     const registered = yield* applyInstall(where, plan, runCommand)
     yield* Console.log(`Registered the Wherefore native messaging host (${NATIVE_HOST_NAME}):`)
     for (const entry of registered) {
@@ -54,7 +65,7 @@ const install = Command.make("install", {}, () =>
     }
     yield* Console.log(`
 Chrome runs ${wrapperPath(where)},
-which starts ${process.execPath} ${cliPath()}.
+which starts ${node} ${cliPath()}.
 Only the Wherefore extension (${EXTENSION_ORIGIN}) may start it.
 
 Next: reload the extension in chrome://extensions (or press "Check again" in its Settings),

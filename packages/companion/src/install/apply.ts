@@ -15,7 +15,8 @@ import {
   registryQuery,
   type UninstallPlan,
   windowsManifestPath,
-  wrapperPath
+  wrapperPath,
+  wrapperTargets
 } from "./plan.ts"
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
@@ -121,8 +122,24 @@ const checkManifest = (location: Location, file: string) =>
     if (parsed.path !== wrapperPath(location)) {
       return { _tag: "Different", where: file, problem: `it starts ${String(parsed.path)}` } as const
     }
-    if (!(yield* exists(wrapperPath(location)))) {
+    const script = yield* Effect.promise(() => Fs.readFile(wrapperPath(location), "utf8").catch(() => undefined))
+    if (script === undefined) {
       return { _tag: "Different", where: file, problem: `${wrapperPath(location)} is missing` } as const
+    }
+    // The wrapper pins a Node and a cli.js; a removed Node version or a moved checkout breaks it.
+    const targets = wrapperTargets(location.platform, script)
+    if (targets === undefined) {
+      return { _tag: "Different", where: file, problem: `${wrapperPath(location)} is from an older install` } as const
+    }
+    if (!(yield* exists(targets.cli))) {
+      return { _tag: "Different", where: file, problem: `the wrapper starts ${targets.cli}, which is gone` } as const
+    }
+    if (!(yield* exists(targets.node))) {
+      return {
+        _tag: "Different",
+        where: file,
+        problem: `the Node it pins (${targets.node}) is gone; it falls back to \`node\` on PATH`
+      } as const
     }
     return { _tag: "Installed", where: file } as const
   })

@@ -31,13 +31,17 @@ node packages/companion/dist/cli.js install
   `HKCU\Software\<browser>\NativeMessagingHosts\` for Chrome, Chromium, Brave and Edge.
 
 The manifest points at `~/.wherefore/native-host.sh` (`native-host.bat` on Windows), which runs
-`dist/cli.js` with the Node that ran `install`. It also copies `PATH`, proxy settings and a few
+`dist/cli.js` with the Node that ran `install`. That Node is pinned by a stable `PATH` entry
+when one points at it (e.g. `/run/current-system/sw/bin/node` rather than a `/nix/store/...`
+path), and if the pinned Node is ever gone the wrapper falls back to `node` on the copied
+`PATH`. It also copies `PATH`, proxy settings and a few
 other variables from your shell, because Chrome starts it with a minimal environment. It never
 copies API keys. Only the Wherefore extension (`chrome-extension://anpbbaiepneaddgoldgmapilgiflochg/`)
 may start it.
 
 The wrapper runs `dist/cli.js` from your checkout, so a rebuild takes effect the next time Chrome
-starts the host. If you move the checkout or switch Node versions, run `install` again.
+starts the host. If you move the checkout, run `install` again; `status` reports a wrapper whose
+`cli.js` or pinned Node is gone as `needs install`.
 
 Then reload the extension in `chrome://extensions`, or press **Check again** in its Settings.
 Settings → Companion should say "Connected".
