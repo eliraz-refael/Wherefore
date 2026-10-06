@@ -38,10 +38,12 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
     remove_item: ({ id }) => store.removeItem(id),
     restore_item: ({ removed }) => store.restoreItem(removed),
     update_settings: ({ settings }) => store.updateSettings(settings),
+    reset_store_key: ({ key }) => Effect.map(store.resetKey(key), (backupKey) => ({ backupKey })),
     // Every save also sweeps runs whose page is gone, so a new run marks the one a closed page left.
     save_run: ({ run }) =>
       Effect.andThen(store.saveRun(run), store.interruptRuns(locks.isLive, run.id)).pipe(Effect.asVoid),
-    check_runs: () => store.interruptRuns(locks.isLive).pipe(Effect.asVoid)
+    check_runs: () => store.interruptRuns(locks.isLive).pipe(Effect.asVoid),
+    set_run_reviewed: ({ id, reviewed }) => store.setRunReviewed(id, reviewed)
   })
 }))
 

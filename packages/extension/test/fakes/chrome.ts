@@ -80,6 +80,7 @@ export class FakeChrome {
   private nextGroupId = 1
   private nextSessionId = 1
   private readonly tabListeners = new Set<Queue.Queue<TabUpdate>>()
+  private readonly tabsChangedListeners = new Set<() => void>()
   private readonly storageListeners = { local: new Set<Queue.Queue<StorageChanges>>(), session: new Set<Queue.Queue<StorageChanges>>() }
 
   constructor(init: FakeChromeInit = {}) {
@@ -95,6 +96,16 @@ export class FakeChrome {
     this.reloadCompletes = init.reloadCompletes ?? true
     this.maxRecentlyClosed = init.maxRecentlyClosed ?? 25
     this.refuseUrls = new Set(init.refuseUrls ?? [])
+  }
+
+  /** Calls `listener` after tabs open or close (for a view's fake `PageTabs`). Returns the unsubscribe. */
+  onTabsChanged(listener: () => void): () => void {
+    this.tabsChangedListeners.add(listener)
+    return () => this.tabsChangedListeners.delete(listener)
+  }
+
+  private tabsChanged(): void {
+    for (const listener of this.tabsChangedListeners) listener()
   }
 
   tabsIn(windowId: number): Array<Browser.tabs.Tab> {
@@ -125,6 +136,7 @@ export class FakeChrome {
     const tab = tabOf({ id: this.nextTabId++, windowId, url: properties.url ?? "chrome://newtab/" }, index)
     tab.active = properties.active ?? true
     this.tabs.push(tab)
+    this.tabsChanged()
     return tab
   }
 
@@ -149,6 +161,7 @@ export class FakeChrome {
         this.reindex(windowId)
       }
     }
+    if (closing.length > 0) this.tabsChanged()
   }
 
   private restoreSession(sessionId: string): Browser.sessions.Session | undefined {

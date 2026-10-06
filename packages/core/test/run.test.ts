@@ -9,6 +9,7 @@ import {
   Run,
   RunId,
   type RunIndexEntry,
+  setReviewed,
   upsertRunIndex
 } from "../src/index.ts"
 import { decodeOk, encodeOk, rejects } from "./helpers.ts"
@@ -114,6 +115,18 @@ describe("interruptRun", () => {
 
     const done: Run = { ...run, status: "succeeded", finishedAt: at("2026-10-05T09:01:00.000Z") }
     expect(interruptRun(done, at("2026-10-05T10:00:00.000Z"))).toBe(done)
+  })
+})
+
+describe("setReviewed", () => {
+  it("records when a result was reviewed, and clears it again; runs stored without it still decode", () => {
+    const done = decodeOk(Run, { ...wireRun, status: "succeeded", finishedAt: "2026-10-05T09:01:00.000Z" })
+    expect(done.reviewedAt).toBeUndefined()
+    const reviewed = setReviewed(done, at("2026-10-05T09:02:00.000Z"))
+    expect(encodeOk(Run, reviewed)).toMatchObject({ reviewedAt: "2026-10-05T09:02:00.000Z" })
+    const again = setReviewed(reviewed, undefined)
+    expect("reviewedAt" in again).toBe(false)
+    expect(setReviewed(done, undefined)).toBe(done)
   })
 })
 

@@ -59,8 +59,10 @@ describe("WorkerRpcs", () => {
       "remove_item",
       "restore_item",
       "update_settings",
+      "reset_store_key",
       "save_run",
-      "check_runs"
+      "check_runs",
+      "set_run_reviewed"
     ])
   })
 })

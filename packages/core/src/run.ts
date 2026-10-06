@@ -147,7 +147,12 @@ export const Run = Schema.Struct({
   /** The submitted result; empty until `submit_intentions` succeeds. */
   intentions: Schema.Array(Intention),
   usage: RunUsage,
-  error: Schema.optionalKey(RunError)
+  error: Schema.optionalKey(RunError),
+  /**
+   * When the user finished with the result (saved and closed from the review screen). Absent while
+   * the result still waits for review. Optional, so runs stored before it existed still decode.
+   */
+  reviewedAt: Schema.optionalKey(DateTimeUtc)
 }).check(
   Schema.makeFilter((run) =>
     (run.status === "running") === (run.finishedAt === undefined) ||
@@ -194,6 +199,14 @@ export const upsertRunIndex = (
 }
 
 export const INTERRUPTED_MESSAGE = "The window running this tidy-up was closed before it finished."
+
+/** Marks a run's result as reviewed (`at`), or as waiting for review again (`undefined`). */
+export const setReviewed = (run: Run, at: DateTime.Utc | undefined): Run => {
+  if (at !== undefined) return { ...run, reviewedAt: at }
+  if (run.reviewedAt === undefined) return run
+  const { reviewedAt: _, ...rest } = run
+  return rest
+}
 
 /** A run whose page went away while it was running. Other runs are returned unchanged. */
 export const interruptRun = (run: Run, at: DateTime.Utc): Run =>
