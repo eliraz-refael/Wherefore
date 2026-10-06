@@ -4,12 +4,22 @@
  * when stored data can't be read.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { API_MODELS, type ApiModel, isApiModel, modelOf, type ResettableKey, type Run, SENSITIVE_HOSTS, type Settings as SettingsValue } from "@wherefore/core"
+import {
+  API_MODELS,
+  type ApiModel,
+  type CompanionStatus,
+  isApiModel,
+  modelOf,
+  type ResettableKey,
+  type Run,
+  SENSITIVE_HOSTS,
+  type Settings as SettingsValue
+} from "@wherefore/core"
 import { DateTime } from "effect"
 import { type FormEvent, useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
-import { resetStoreKey, saveApiKey, setModel } from "../actions.ts"
-import { itemsAtom, runsAtom, screenAtom, settingsAtom } from "../atoms.ts"
+import { checkCompanion, resetStoreKey, saveApiKey, setModel } from "../actions.ts"
+import { companionAtom, itemsAtom, runsAtom, screenAtom, settingsAtom } from "../atoms.ts"
 import { formatUsd, maskKey, plural, startOfWeek } from "../format.ts"
 import { useAct } from "../hooks.ts"
 import { StoreProblem, SubHeader } from "./common.tsx"
@@ -19,6 +29,7 @@ export function Settings() {
   const settings = useAtomValue(settingsAtom)
   const items = useAtomValue(itemsAtom)
   const runs = useAtomValue(runsAtom)
+  const companion = useAtomValue(companionAtom)
   const setScreen = useAtomSet(screenAtom)
   return (
     <div className="wf-screen">
@@ -26,6 +37,7 @@ export function Settings() {
       <main className="wf-main">
         {AsyncResult.isSuccess(settings) ? <Connection settings={settings.value} /> : null}
         {AsyncResult.isFailure(settings) ? <Recover storeKey="settings" what="Your settings" /> : null}
+        {AsyncResult.isSuccess(companion) ? <Companion status={companion.value} /> : null}
         {AsyncResult.isSuccess(runs) ? <Usage runs={runs.value.runs} /> : null}
         {AsyncResult.isFailure(runs) ? <Recover storeKey="runIndex" what="Your tidy-up history" /> : null}
         {AsyncResult.isFailure(items) ? <Recover storeKey="items" what="Your list" /> : null}
@@ -126,6 +138,53 @@ function Connection({ settings }: { readonly settings: SettingsValue }) {
           >
             {API_MODELS.map((offered) => <option key={offered.id} value={offered.id}>{offered.name}</option>)}
           </select>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** What the companion's state means for the user, in one line. */
+export const companionLine = (status: CompanionStatus): string => {
+  switch (status._tag) {
+    case "Checking":
+      return "Checking…"
+    case "NotInstalled":
+      return "Not installed. Claude Code and MCP need it; API mode doesn't."
+    case "Connected":
+      return `Connected · version ${status.companionVersion}`
+    case "Unavailable":
+      return status.retryAt === undefined ? status.message : `${status.message} Trying again shortly.`
+  }
+}
+
+/** The companion's status line (M2). Setup help and onboarding arrive with ACP mode. */
+function Companion({ status }: { readonly status: CompanionStatus }) {
+  const act = useAct()
+  const [busy, setBusy] = useState(false)
+  const check = async () => {
+    setBusy(true)
+    await act(checkCompanion)
+    setBusy(false)
+  }
+  const canCheck = status._tag === "NotInstalled" || status._tag === "Unavailable"
+  return (
+    <section className="wf-settings-section" aria-labelledby="settings-companion">
+      <h2 id="settings-companion" className="wf-group-title">Companion</h2>
+      <div className="wf-card wf-settings-card">
+        <div className="wf-settings-row">
+          <span className={status._tag === "Connected" ? "wf-dot" : "wf-dot wf-dot-off"} aria-hidden="true" />
+          <span className="wf-grow wf-stack">
+            <span className="wf-strong">Wherefore companion</span>
+            <span className="wf-sub" role="status">{companionLine(status)}</span>
+          </span>
+          {canCheck
+            ? (
+              <button type="button" className="wf-button wf-button-small" onClick={check} disabled={busy}>
+                Check again
+              </button>
+            )
+            : null}
         </div>
       </div>
     </section>

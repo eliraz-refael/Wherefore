@@ -20,6 +20,7 @@ import {
   interruptRun,
   ItemNotFound,
   markDone,
+  type ProfileId,
   type RemovedItem,
   removeItem,
   reopen,
@@ -37,7 +38,7 @@ import {
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { itemsKey, runIndexKey, runKey, runKeyPrefix, settingsKey, storeKeys } from "../store/keys.ts"
+import { itemsKey, profileKey, runIndexKey, runKey, runKeyPrefix, settingsKey, storeKeys } from "../store/keys.ts"
 import { decodeStored, encodeStored, type StoreKey } from "../store/StoreKey.ts"
 
 export type StoreError = StoreUnreadable | BrowserError
@@ -92,6 +93,8 @@ export class Store extends Context.Service<Store, {
    * the value was readable after all.
    */
   readonly resetKey: (name: ResettableKey) => Effect.Effect<string | null, BrowserError>
+  /** This profile's id for the companion: the stored one, or a new one from `make`, stored now. */
+  readonly profileId: (make: () => ProfileId) => Effect.Effect<ProfileId, StoreError>
 }>()("@wherefore/extension/Store") {
   static readonly layer: Layer.Layer<Store, never, ChromeApi> = Layer.effect(Store)(
     Effect.gen(function*() {
@@ -264,9 +267,17 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
       return backupKey
     }).pipe(Semaphore.withPermit(lock))
 
+  const profileId = (make: () => ProfileId) =>
+    update(profileKey, (stored) => {
+      if (stored !== undefined) return Effect.succeed([stored.id, stored] as const)
+      const id = make()
+      return Effect.succeed([id, { id }] as const)
+    })
+
   return {
     read,
     migrateAll,
+    profileId,
     setRunReviewed,
     resetKey,
     saveItems: (incoming) =>

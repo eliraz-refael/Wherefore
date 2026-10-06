@@ -3,6 +3,7 @@ node_modules
 .wxt
 *.zip
 companion/dist
+packages/companion/dist
 .claude/task-state/
 
 # Locally installed agent skills (third-party, not part of the project)

@@ -15,6 +15,7 @@ import { makePanelLayer } from "../../src/ui/panelLayer.ts"
 import type { FakeChrome } from "./chrome.ts"
 import { Harness } from "./harness.ts"
 import { ScriptedModel } from "./model.ts"
+import { FakeNativeHost } from "./native.ts"
 import { FakeRelayHub, fakePageTabs } from "./page.ts"
 
 export interface View extends RenderResult {
@@ -30,8 +31,12 @@ export class Panels {
   readonly harness: Harness
   readonly hub = new FakeRelayHub()
 
-  constructor(readonly chrome: FakeChrome, readonly model: ScriptedModel = new ScriptedModel([])) {
-    this.harness = new Harness(chrome)
+  constructor(
+    readonly chrome: FakeChrome,
+    readonly model: ScriptedModel = new ScriptedModel([]),
+    readonly native: FakeNativeHost = new FakeNativeHost("missing")
+  ) {
+    this.harness = new Harness(chrome, native)
   }
 
   readonly start = () => Effect.runPromise(this.harness.startWorker)

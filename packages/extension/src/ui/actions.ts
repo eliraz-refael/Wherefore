@@ -83,6 +83,9 @@ export const saveApiKey = (key: string) => updateSettings((settings) => ({ ...se
 
 export const setModel = (model: ApiModel) => updateSettings((settings) => ({ ...settings, model }))
 
+/** Asks the worker to connect to the companion now ("Check again"). The status atom follows by itself. */
+export const checkCompanion = Effect.flatMap(worker, (client) => client.call("check_companion", undefined))
+
 /** Recovers an unreadable key (keeping a backup) and reloads what views show of it. */
 export const resetStoreKey = (key: ResettableKey) =>
   Effect.gen(function*() {

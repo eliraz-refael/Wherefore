@@ -12,6 +12,7 @@
  * wins) can add their own message tags to these unions on the same Port; the worker already
  * tracks every connected page.
  */
+import { RpcFromClient, RpcFromServer } from "@wherefore/core"
 import { Schema } from "effect"
 
 export const PORT_NAME = "wherefore/rpc"
@@ -33,37 +34,13 @@ export interface PortLike {
   readonly sender?: { readonly id?: string | undefined; readonly url?: string | undefined } | undefined
 }
 
-const RequestId = Schema.Union([Schema.String, Schema.Number])
-const Header = Schema.Tuple([Schema.String, Schema.String])
-
-/** Page to worker. */
-export const ToWorker = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.tag("Request"),
-    id: RequestId,
-    tag: Schema.String,
-    payload: Schema.Unknown,
-    headers: Schema.Array(Header),
-    isNotification: Schema.optionalKey(Schema.Literal(true)),
-    traceId: Schema.optionalKey(Schema.String),
-    spanId: Schema.optionalKey(Schema.String),
-    sampled: Schema.optionalKey(Schema.Boolean)
-  }),
-  Schema.Struct({ _tag: Schema.tag("Ack"), requestId: RequestId }),
-  Schema.Struct({ _tag: Schema.tag("Interrupt"), requestId: RequestId }),
-  Schema.Struct({ _tag: Schema.tag("Eof") }),
-  Schema.Struct({ _tag: Schema.tag("Ping") })
-])
-export type ToWorker = typeof ToWorker.Type
+/** Page to worker: an RPC client's message (core companion.ts, shared with the broker). */
+export const ToWorker = RpcFromClient
+export type ToWorker = RpcFromClient
 
 /** Worker to page. */
-export const FromWorker = Schema.Union([
-  Schema.Struct({ _tag: Schema.tag("Chunk"), requestId: RequestId, values: Schema.NonEmptyArray(Schema.Unknown) }),
-  Schema.Struct({ _tag: Schema.tag("Exit"), requestId: RequestId, exit: Schema.Unknown }),
-  Schema.Struct({ _tag: Schema.tag("Defect"), defect: Schema.Unknown }),
-  Schema.Struct({ _tag: Schema.tag("Pong") })
-])
-export type FromWorker = typeof FromWorker.Type
+export const FromWorker = RpcFromServer
+export type FromWorker = RpcFromServer
 
 export const decodeToWorker = Schema.decodeUnknownOption(ToWorker)
 export const decodeFromWorker = Schema.decodeUnknownOption(FromWorker)

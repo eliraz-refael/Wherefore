@@ -33,6 +33,10 @@ export const itemsAtom = Atom.keepAlive(panelRuntime.atom(watchKey(itemsKey)))
 export const runsAtom = Atom.keepAlive(
   panelRuntime.atom(Stream.unwrap(Effect.map(Effect.service(StoreReader), (reader) => reader.watchRuns)))
 )
+/** The worker's link to the companion (Settings, and onboarding in M2 PR C). */
+export const companionAtom = Atom.keepAlive(
+  panelRuntime.atom(Stream.unwrap(Effect.map(Effect.service(StoreReader), (reader) => reader.watchCompanion)))
+)
 export const openTabsAtom = Atom.keepAlive(
   panelRuntime.atom(Stream.unwrap(Effect.map(Effect.service(PageTabs), (tabs) => tabs.watch)))
 )

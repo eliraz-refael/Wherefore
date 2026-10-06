@@ -10,10 +10,10 @@
  * run with `watchRuns`. A run that can't be read is listed in `unreadable` and doesn't hide the
  * others.
  */
-import { type BrowserError, type Run, type RunId, type RunIndexEntry, StoreUnreadable } from "@wherefore/core"
-import { Context, Effect, Layer, Result, Stream } from "effect"
+import { type BrowserError, CompanionStatus, type Run, type RunId, type RunIndexEntry, StoreUnreadable } from "@wherefore/core"
+import { Context, Effect, Layer, Option, Result, Schema, Stream } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { runIndexKey, runKey, runKeyPrefix } from "./keys.ts"
+import { companionStatusKey, runIndexKey, runKey, runKeyPrefix } from "./keys.ts"
 import { decodeStored, type StoreKey } from "./StoreKey.ts"
 
 /** Every stored run, oldest first. */
@@ -22,6 +22,8 @@ export interface RunList {
   /** Runs whose stored value can't be read (the worker backs them up). */
   readonly unreadable: ReadonlyArray<StoreUnreadable>
 }
+
+const decodeCompanionOption = Schema.decodeUnknownOption(CompanionStatus)
 
 export class StoreReader extends Context.Service<StoreReader, {
   /** The key's current value; its `empty` value when nothing is stored. */
@@ -38,6 +40,11 @@ export class StoreReader extends Context.Service<StoreReader, {
    * decoded again. Fails (and ends) only if the run index can't be read.
    */
   readonly watchRuns: Stream.Stream<RunList, StoreUnreadable | BrowserError>
+  /**
+   * The worker's link to the companion (from `chrome.storage.session`) now, then after every
+   * change. `Checking` until the worker has written one.
+   */
+  readonly watchCompanion: Stream.Stream<CompanionStatus, BrowserError>
 }>()("@wherefore/extension/StoreReader") {
   static readonly layer: Layer.Layer<StoreReader, never, ChromeApi> = Layer.effect(StoreReader)(
     Effect.gen(function*() {
@@ -123,7 +130,21 @@ export class StoreReader extends Context.Service<StoreReader, {
         return Stream.concat(Stream.succeed(listOf(index, decoded)), updates)
       }))
 
-      return StoreReader.of({ get, watch, runs, watchRuns })
+      const session = (yield* ChromeApi).storage.session
+      const checking: CompanionStatus = { _tag: "Checking" }
+      const decodeCompanion = (raw: unknown): CompanionStatus =>
+        Option.getOrElse(decodeCompanionOption(raw), () => checking)
+      const watchCompanion: Stream.Stream<CompanionStatus, BrowserError> = Stream.unwrap(Effect.gen(function*() {
+        const changes = yield* session.changes
+        const current = decodeCompanion((yield* session.get(companionStatusKey))[companionStatusKey])
+        const updates = Stream.fromQueue(changes).pipe(
+          Stream.filter((change) => Object.hasOwn(change, companionStatusKey)),
+          Stream.map((change) => decodeCompanion(change[companionStatusKey]?.newValue))
+        )
+        return Stream.concat(Stream.succeed(current), updates)
+      }))
+
+      return StoreReader.of({ get, watch, runs, watchRuns, watchCompanion })
     })
   )
 }

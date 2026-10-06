@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 import {
   API_MODELS,
+  CompanionRpcs,
   DEFAULT_MODEL,
   ListTabs,
   MODEL_PRICES,
@@ -38,13 +39,14 @@ describe("WorkerRpcs", () => {
     expect(Schema.decodeUnknownSync(payload)({ tab_ids: [3, 4], max_chars: 500 })).toEqual({ tabIds: [3, 4], maxChars: 500 })
   })
 
-  it("is the merge of the tool, tab, store and run groups", () => {
+  it("is the merge of the tool, tab, store, run and companion groups", () => {
     const tags = [...WorkerRpcs.requests.keys()]
     expect(tags).toEqual([
       ...TabToolRpcs.requests.keys(),
       ...TabRpcs.requests.keys(),
       ...StoreRpcs.requests.keys(),
-      ...RunRpcs.requests.keys()
+      ...RunRpcs.requests.keys(),
+      ...CompanionRpcs.requests.keys()
     ])
     expect(tags).toEqual([
       "list_tabs",
@@ -62,7 +64,8 @@ describe("WorkerRpcs", () => {
       "reset_store_key",
       "save_run",
       "check_runs",
-      "set_run_reviewed"
+      "set_run_reviewed",
+      "check_companion"
     ])
   })
 })

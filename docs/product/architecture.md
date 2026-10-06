@@ -8,18 +8,20 @@ Builds on [story.md](story.md) and [../research/effect-v4.md](../research/effect
 packages/
   core/        Pure domain. No browser, no Node.
                Schemas (Intention, Item, Run, Tab, Settings), the Toolkit (5 tools), the
-               worker's RPC group (WorkerRpcs), the prompt, URL normalization + matching,
-               Markdown export. Effect + Schema, plus Tool/Toolkit and Rpc/RpcGroup from
-               effect/unstable/* (imported only via src/unstable.ts).
+               worker's RPC group (WorkerRpcs), the broker's (BrokerRpcs), the native-port
+               frames and the extension's identity (EXTENSION_ID, NATIVE_HOST_NAME), the
+               prompt, URL normalization + matching, Markdown export. Effect + Schema, plus
+               Tool/Toolkit and Rpc/RpcGroup from effect/unstable/* (via src/unstable.ts).
   extension/   WXT, MV3.
-               background: TabTools, Store, RPC server for pages, Broker client
-               (thin; never runs a model)
+               background: TabTools, Store, RPC server for pages, CompanionLink (the one
+               native port to the companion; thin, never runs a model)
                ui: side panel + full page (React 19 + Atom), shared components
                api-mode agent (effect/ai + @effect/ai-anthropic), runs in the page
-  companion/   Node CLI (effect/cli).
-               broker: native-messaging host the extension keeps open
-               mcp: McpServer over stdio, serving core's Toolkit through the broker
-               acp: spawns the ACP agent (effect/process + @agentclientprotocol/sdk)
+  companion/   Node CLI (effect/cli), bundled to one file (dist/cli.js, rolldown).
+               native-host: the broker, one per connected Chrome profile (M2 PR A)
+               install / uninstall / status: native host manifests and registry keys (PR A)
+               mcp: McpServer over stdio, serving core's Toolkit through the brokers (PR B)
+               acp: spawns the ACP agent (effect/process + @agentclientprotocol/sdk) (PR C)
 ```
 
 One pnpm workspace; `core` is imported by both other packages, so tool schemas, wire types and the prompt exist exactly once.
@@ -28,7 +30,7 @@ One pnpm workspace; `core` is imported by both other packages, so tool schemas, 
 
 ### A1. Effect v4, used in two tiers
 - **Commit everywhere:** `Effect`, `Schema`, `Context.Service`/`Layer`, `Stream`, `Scope`. Stable core API.
-- **Adopt behind our own seams:** `effect/ai` + `@effect/ai-anthropic`, `McpServer`, `effect/rpc`, `effect/process`, `effect/cli` and `effect/reactivity` are all marked unstable. Each sits behind one service of ours (`ModelClient`, `McpSurface`, `BrokerRpc`, `WorkerClient` and the worker's RPC server, `AgentProcess`, the UI store), so a breaking minor release changes one file. RPC group definitions (`Rpc`/`RpcGroup`) live in `core` with the schemas they reuse. Exact version pins; upgrades are deliberate. Each package imports `effect/unstable/*` only in its `src/unstable.ts`, and `@effect/ai-anthropic` (built on `effect/unstable/ai`) is held to the same rule (`pnpm check:imports`, M1 PR 3).
+- **Adopt behind our own seams:** `effect/ai` + `@effect/ai-anthropic`, `McpServer`, `effect/rpc`, `effect/socket`, `effect/process`, `effect/cli` and `effect/reactivity` are all marked unstable. Each sits behind one service of ours (`ModelClient`, `McpSurface`, the broker's socket server and `BrokerClient`, `WorkerLink` and `CompanionLink` on the native port, `WorkerClient` and the worker's RPC server, `AgentProcess`, the UI store), so a breaking minor release changes one file. RPC group definitions (`Rpc`/`RpcGroup`) live in `core` with the schemas they reuse. Exact version pins; upgrades are deliberate. Each package imports `effect/unstable/*` only in its `src/unstable.ts`, and `@effect/ai-anthropic` (built on `effect/unstable/ai`) and `@effect/platform-node-shared` (Node's socket server, stdio and CLI services, built on the unstable socket, cli and process modules) are held to the same rule (`pnpm check:imports`, M1 PR 3; platform-node in M2).
 - **Keep ours:** ACP protocol (`@agentclientprotocol/sdk`, wrapped in a service), native-messaging framing (a small codec), `chrome.*` access.
 - **Why:** typed errors, cancellation and resource safety are exactly what the bridge, the agent processes and the run lifecycle got wrong or hand-rolled in the POC. Schema removes the zod-plus-hand-written-types duplication.
 
@@ -36,11 +38,17 @@ One pnpm workspace; `core` is imported by both other packages, so tool schemas, 
 The five tools are defined once in `core` as an Effect `Toolkit`. API mode hands it to `effect/ai`'s chat with our own short tool loop (`generateText` does one round per call: one model request, then the tools it asked for). The loop ends when `submit_intentions` passes core's coverage check, at a turn limit (15 requests), or on cancel; a model that stops without submitting is reminded twice. The system prompt and the kickoff are in `core` (`prompt.ts`); in API mode the agent lists the tabs itself and puts them in the kickoff, as the POC did, saving one round trip. API mode offers two models, `claude-opus-5-5` (the default) and `claude-sonnet-5-5` (`API_MODELS` in `core`; owner's decision: Haiku is too weak for triage). A stored setting that names any other model runs on the default. MCP mode serves the same Toolkit with `McpServer`. ACP mode passes our MCP server to the agent, as today. JSON Schema for tool definitions comes from Schema (`toJsonSchemaDocument`).
 
 ### A3. The companion is a broker; the extension stops polling ports
-Today every MCP server listens on a localhost port and the service worker probes 8 ports. That causes the console noise, needs an origin check, and adds up to 30 s of discovery delay.
-- The service worker opens **one native-messaging connection** to the companion when the companion is installed, and keeps it open. Since Chrome 105, an open native port keeps the worker alive.
-- MCP servers and ACP sessions connect to that broker over a **local socket** (a Unix domain socket, or a named pipe on Windows), speaking `effect/rpc`.
-- Tool calls flow agent → MCP server → broker → native port → service worker → `TabTools`.
-- **Trade-off:** a small Node process stays running while Chrome is open, for users who installed the companion. API-key-only users have no companion and no process. Accepted (2026-10-04).
+The POC's MCP servers each listened on a localhost port and the service worker probed 8 ports. That caused the console noise, needed an origin check, and added up to 30 s of discovery delay. Since M2 PR A nothing listens on TCP and nothing polls.
+- **One native port per profile.** The service worker (`CompanionLink`) opens **one native-messaging connection** to the companion's host, `io.github.eliraz_refael.wherefore` (`NATIVE_HOST_NAME` in `core`; not the POC's name, so both can be installed), at startup, and keeps it open. Since Chrome 105, an open native port keeps the worker alive. Chrome starts one host process per connection, so **each Chrome profile gets its own broker** (owner's decision, M2).
+- **Profile id.** Chrome tells a host nothing about the profile that started it. The worker makes a random id once (16 bytes, lowercase base32), keeps it in `chrome.storage.local` (`profile`), and sends it in its first message.
+- **Handshake.** Worker → host `Hello { protocol, profileId, extensionVersion }`; host → worker `Welcome { protocol, companionVersion }`. A different protocol version stops both sides with a message saying which one to update. Then the broker calls the worker's `TabToolRpcs` (`ToWorker`/`FromWorker` frames carrying `effect/rpc` messages, the same envelopes pages use). Calls the other way (the panel starting an ACP run, PR C) get their own frame tags on the same port.
+- **The broker.** The host process serves `BrokerRpcs` (`core`) over a **local socket** speaking `effect/rpc` (ndjson): `broker_info` (profile, versions, pid) plus the three worker-side tools, forwarded with the same payload and success schemas; a forwarded call can also fail with `ExtensionUnavailable` (Chrome closed the port mid-call; never a hang).
+- **Where.** State lives in `~/.wherefore` (`$WHEREFORE_HOME` overrides): the wrapper script Chrome launches, and the broker registry `run/`, one `<profileId>.json` per live broker (pid, socket, versions). On macOS and Linux the socket is `run/<profileId>.<pid>.sock` and the directory is user-only (0700, checked: not a symlink, ours; entries and sockets 0600). On Windows it is a named pipe, `\\.\pipe\wherefore-<hash of the state dir>-<profileId>-<pid>`. The pid makes each broker's socket its own, so a broker that exits late never removes its successor's. Entries are written after the socket listens and removed on stdin EOF or a signal; a crashed broker's entry (Windows terminates hosts outright) is dropped by the next broker or `status` when its process is gone or its socket refuses connections.
+- **Who sees what.** An ACP run (PR C) sees only its own profile's broker. An MCP agent (PR B) finds every live broker in the registry and sees every connected profile, with profile-qualified tab ids.
+- **Security.** The host manifest allows only our pinned extension origin, and the host checks the origin Chrome passes it before reading anything. The extension connects to our host name only. Page text is never logged; stdout carries native-messaging frames only (logs go to stderr), and a message over Chrome's 1 MB host→extension limit fails with a typed error instead of being sent.
+- **Reconnects.** Host not found: the status is "not installed" and the worker doesn't retry until its next start or "Check again" (`check_companion`). Forbidden or incompatible: same, with a message. Anything else: retry after 1, 2, 4, ... s, at most 6 times in a row; a connection that stayed up 30 s starts the count over. The status (`CompanionStatus`) is kept in `chrome.storage.session` for views; Settings shows it.
+- **Install** (during M2, from the repo; npm in M4): `pnpm -C packages/companion build && node packages/companion/dist/cli.js install` writes the manifest for Chrome (always) and Chrome Beta, Chromium, Brave, Edge and Arc when present (macOS/Linux), or `HKCU` registry keys (Windows); `uninstall` removes them; `status` lists registrations and live brokers.
+- **Trade-off:** a small Node process stays running per connected profile while Chrome is open, for users who installed the companion. API-key-only users have no companion and no process. Accepted (2026-10-04).
 
 ### A4. The service worker is thin; runs live where they can't be killed
 - **Service worker:** executes tools (`TabTools`), owns storage writes (`Store`), holds the broker connection. It never runs a model loop, because it can be stopped at any time.
@@ -53,7 +61,7 @@ Today every MCP server listens on a localhost port and the service worker probes
 - **Undo survives the worker.** `closeTabs` writes the closed tabs to `chrome.storage.session` (`undo:<token>`) before closing anything; `undoClose(token)` works from a restarted worker. Records expire after 10 minutes and are dropped on the next close. The caller passes its window id (`keepWindowAlive`): closing every tab there opens a new one first, so the side panel stays.
 
 ### A5. Storage: `chrome.storage.local` behind a `Store` service
-- **What's stored:** `items` and `settings` (M1, PR 2), and runs (PR 3). Each key is stored as `{ version, data }`, one version per key (not per item). Reading decodes the envelope, runs the key's migrations up to the current version, decodes `data` with its schema, and the worker writes a migrated value back. Adding a key is one `StoreKey` value.
+- **What's stored:** `items` and `settings` (M1, PR 2), runs (PR 3), and the profile id for the companion, `profile` (M2). The companion's link status is session state, in `chrome.storage.session` (`companion`), unversioned. Each key is stored as `{ version, data }`, one version per key (not per item). Reading decodes the envelope, runs the key's migrations up to the current version, decodes `data` with its schema, and the worker writes a migrated value back. Adding a key is one `StoreKey` value.
 - **Runs: one key per run.** Each run is stored under `run:<id>`, so a step rewrites only its own run. `runIndex` lists the stored runs, oldest first, as `{ id, status }`, and keeps the last 10: saving an 11th removes the oldest run's key. The worker writes the run and, when the run is new or its status changed, the index in one `set`. Pruning and the interrupted-run sweep (A4) read the index, and open only the runs it says are running. Views follow one run with `StoreReader.watch(runKey(id))`, or every run with `StoreReader.watchRuns`, which decodes only the runs that changed.
 - **Never wipe user data.** A value that doesn't decode (or comes from a newer version) is copied to `backup:<key>:<epoch ms>`, and reads and writes of that key fail with a typed `StoreUnreadable` until the user decides. The way out (M1 PR 4) is `reset_store_key` for `items`, `settings` or `runIndex`: it makes sure the backup exists, then removes the key, so it reads as empty; the UI offers it as "Start fresh (keeps the copy)". Views get the same error without making a backup. This applies per run key: an unreadable run is backed up and refused on its own, the sweep skips it, and `watchRuns` lists it under `unreadable` next to the readable runs.
 - **Writes:** only the worker writes (A4), read-modify-write under one lock; item and run changes go through `core`'s pure helpers. Views read `chrome.storage.local` directly (`StoreReader.get`, `StoreReader.watch` as a `Stream`). Settings (API key, model) stay in `chrome.storage.local`, never `sync`.
@@ -73,7 +81,7 @@ Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid
 **UX direction (canvas v6):** *Your list* is the home screen. Triage is one *Tidy up* screen with smart defaults and a sticky "Save N and close M" bar. Questions come one at a time and are answered with a tap. Builder details (model, cost, MCP, export) live in Settings. The UI shows no confidence, evidence, filters or step log, and never says "intention". Done stays a labelled button. Accessibility rules from the POC review carry over: native controls, labelled inputs, focus kept on in-place updates, a live region for status.
 
 ### A8. Testing
-`@effect/vitest` for `core` and services, with `TestClock` and layer mocks for chrome APIs. Companion: the existing no-Chrome smoke tests, ported. Extension end-to-end: Playwright with the unpacked build loaded (from M3).
+`@effect/vitest` for `core` and services, with `TestClock` and layer mocks for chrome APIs (a fake `connectNative` host for the companion link). Companion: framing, install plans per OS, the registry, and the broker end to end over a real socket in a temp dir with a fake worker behind an in-memory native port; plus a no-Chrome smoke script that drives the bundled `dist/cli.js` over pipes (`pnpm -C packages/companion smoke`, in CI). Extension end-to-end: Playwright with the unpacked build loaded (from M3).
 
 ## Milestones
 
@@ -81,7 +89,7 @@ Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid
 | --- | --- | --- |
 | M0 | Foundations | Workspace, Effect pinned, `core` schemas + Toolkit + JSON Schema output + URL matcher, tested |
 | M1 | API-mode parity | Extension with `TabTools`, `Store`, API agent on `effect/ai`, side panel (React + Atom) reaches POC parity: triage, questions, review, save/close/undo |
-| M2 | Companion | Broker + MCP + ACP on Effect; onboarding detects the companion; no port polling |
+| M2 | Companion | Broker + MCP + ACP on Effect; onboarding detects the companion; no port polling. In three PRs: **A** broker + install (one broker per profile, socket registry, status in Settings), **B** MCP mode through the brokers, **C** ACP mode from the panel + onboarding |
 | M3 | Product loop | Incremental triage, Saved list + full page, resume as group, Markdown export, e2e tests |
 | M4 | Store-ready | Optional host permissions requested at first run, icons, privacy policy, unlisted CWS listing, install docs for co-workers |
 
