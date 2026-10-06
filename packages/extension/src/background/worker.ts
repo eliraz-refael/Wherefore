@@ -1,10 +1,13 @@
 /**
  * The whole service worker as one layer: migrate storage at startup, mark runs whose page is gone
- * as interrupted, then serve `WorkerRpcs`. The entrypoint provides the real `ChromeApi`,
- * `PortListener` and `RunLocks`; tests provide fakes.
+ * as interrupted, connect to the companion when it is installed, then serve `WorkerRpcs`. The
+ * entrypoint provides the real `ChromeApi`, `PortListener`, `RunLocks` and `NativeConnector`;
+ * tests provide fakes.
  */
 import { Effect, Layer } from "effect"
 import type { ChromeApi } from "../chrome/ChromeApi.ts"
+import { CompanionLink } from "../companion/CompanionLink.ts"
+import type { NativeConnector } from "../companion/NativeConnector.ts"
 import type { PortListener } from "../messaging/server.ts"
 import { RunLocks } from "../runs/RunLocks.ts"
 import { serveWorkerRpcs } from "./handlers.ts"
@@ -39,7 +42,7 @@ const sweepRuns = Layer.effectDiscard(
   })
 )
 
-export const WorkerLayer: Layer.Layer<never, never, ChromeApi | PortListener | RunLocks> = Layer.mergeAll(
+export const WorkerLayer: Layer.Layer<never, never, ChromeApi | PortListener | RunLocks | NativeConnector> = Layer.mergeAll(
   Layer.provideMerge(sweepRuns, migrateStorage),
-  serveWorkerRpcs
+  serveWorkerRpcs.pipe(Layer.provide(CompanionLink.layer))
 ).pipe(Layer.provide(Layer.mergeAll(TabTools.layer, Store.layer)))

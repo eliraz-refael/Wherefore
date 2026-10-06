@@ -9,6 +9,7 @@ import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
 import { Effect } from "effect"
 import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
+import { FakeNativeHost } from "./fakes/native.ts"
 import { FakeRelayHub } from "./fakes/page.ts"
 import { envelope, ISO_NOW, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
 
@@ -54,6 +55,22 @@ describe("first run", () => {
     fireEvent.change(model, { target: { value: "claude-sonnet-5-5" } })
     await waitFor(() => expect(storedData(chrome, "settings").model).toBe("claude-sonnet-5-5"))
     expect(view.container.innerHTML).not.toContain("sk-ant-secret-key")
+  })
+})
+
+describe("Settings: companion", () => {
+  it("shows the companion's status, and Check again connects once it is installed", async () => {
+    const native = new FakeNativeHost("missing")
+    const app = make(new FakeChrome({ local: { settings: SETTINGS } }), new ScriptedModel([]), native)
+    await app.start()
+    const view = app.open()
+    fireEvent.click(await view.ui.findByRole("button", { name: "Settings" }))
+    expect(await view.ui.findByText("Not installed. Claude Code and MCP need it; API mode doesn't.")).toBeTruthy()
+
+    native.mode = "answer"
+    fireEvent.click(view.ui.getByRole("button", { name: "Check again" }))
+    expect(await view.ui.findByText("Connected · version 0.9.0")).toBeTruthy()
+    expect(view.ui.queryByRole("button", { name: "Check again" })).toBeNull()
   })
 })
 

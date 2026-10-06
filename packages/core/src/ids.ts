@@ -35,3 +35,12 @@ export type UndoToken = typeof UndoToken.Type
 /** Identifies one triage run, e.g. in its storage key `run:<id>`. */
 export const RunId = Schema.NonEmptyString.pipe(Schema.brand("RunId"))
 export type RunId = typeof RunId.Type
+
+/**
+ * Identifies one Chrome profile's install of the extension, for the companion (architecture A3).
+ * Chrome tells a native host nothing about the profile that started it, so the extension makes
+ * this id once (16 random bytes, lowercase base32: 26 characters of `a-z2-7`), keeps it in
+ * `chrome.storage.local` and sends it when it connects. Safe in file and pipe names.
+ */
+export const ProfileId = Schema.String.check(Schema.isPattern(/^[a-z2-7]{26}$/)).pipe(Schema.brand("ProfileId"))
+export type ProfileId = typeof ProfileId.Type

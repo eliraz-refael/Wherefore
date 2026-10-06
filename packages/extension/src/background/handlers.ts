@@ -1,29 +1,25 @@
 /**
- * The worker's RPC handlers: `WorkerRpcs` (core rpc.ts) implemented with `TabTools`, `Store` and
- * `RunLocks`, and the layer that serves them to extension pages.
+ * The worker's RPC handlers: `WorkerRpcs` (core rpc.ts) implemented with `TabTools`, `Store`,
+ * `RunLocks` and `CompanionLink`, and the layer that serves them to extension pages.
  */
-import { type BrowserError, DEFAULT_MAX_CHARS, ItemNotFound, ToolError, WorkerRpcs } from "@wherefore/core"
+import { ItemNotFound, WorkerRpcs } from "@wherefore/core"
 import { Effect, Layer } from "effect"
+import { CompanionLink } from "../companion/CompanionLink.ts"
 import { layerServerProtocol, type PortListener } from "../messaging/server.ts"
 import { RunLocks } from "../runs/RunLocks.ts"
 import { itemsKey } from "../store/keys.ts"
 import { RpcServer } from "../unstable.ts"
 import { Store } from "./Store.ts"
 import { TabTools } from "./TabTools.ts"
-
-/** The model hears what failed, never a stack. */
-const toToolError = (error: BrowserError) => new ToolError({ message: `${error.operation} failed: ${error.message}` })
+import { tabToolHandlers } from "./toolHandlers.ts"
 
 export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
   const tools = yield* TabTools
   const store = yield* Store
   const locks = yield* RunLocks
+  const companion = yield* CompanionLink
   return WorkerRpcs.of({
-    list_tabs: () => tools.listTabs.pipe(Effect.map((tabs) => ({ tabs })), Effect.mapError(toToolError)),
-    read_pages: ({ tabIds, maxChars }) =>
-      Effect.map(tools.readPages(tabIds, maxChars ?? DEFAULT_MAX_CHARS), (pages) => ({ pages })),
-    wake_and_read_pages: ({ tabIds, maxChars }) =>
-      Effect.map(tools.wakeAndReadPages(tabIds, maxChars ?? DEFAULT_MAX_CHARS), (pages) => ({ pages })),
+    ...tabToolHandlers(tools),
     close_tabs: ({ tabIds, keepWindowAlive }) => tools.closeTabs(tabIds, { keepWindowAlive }),
     undo_close: ({ token }) => tools.undoClose(token),
     resume_item: ({ id, windowId }) =>
@@ -43,7 +39,8 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
     save_run: ({ run }) =>
       Effect.andThen(store.saveRun(run), store.interruptRuns(locks.isLive, run.id)).pipe(Effect.asVoid),
     check_runs: () => store.interruptRuns(locks.isLive).pipe(Effect.asVoid),
-    set_run_reviewed: ({ id, reviewed }) => store.setRunReviewed(id, reviewed)
+    set_run_reviewed: ({ id, reviewed }) => store.setRunReviewed(id, reviewed),
+    check_companion: () => companion.check
   })
 }))
 
@@ -51,7 +48,7 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
  * Serves `WorkerRpcs` on every Port from the extension's pages. A handler that dies fails only its
  * own call (`disableFatalDefects`), not every call the page has in flight.
  */
-export const serveWorkerRpcs: Layer.Layer<never, never, TabTools | Store | RunLocks | PortListener> = RpcServer.layer(
+export const serveWorkerRpcs: Layer.Layer<never, never, TabTools | Store | RunLocks | CompanionLink | PortListener> = RpcServer.layer(
   WorkerRpcs,
   { disableTracing: true, disableFatalDefects: true }
 ).pipe(Layer.provide([WorkerHandlers, layerServerProtocol]))

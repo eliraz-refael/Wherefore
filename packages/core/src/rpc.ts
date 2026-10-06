@@ -9,11 +9,13 @@
  * - `TabRpcs`: closing with undo, and resuming an item as a tab group. Used by the UI only.
  * - `StoreRpcs`: every write to the user's items and settings.
  * - `RunRpcs`: persisting triage runs step by step, and marking runs whose page went away.
+ * - `CompanionRpcs`: the state of the worker's link to the companion.
  *
  * `ask_user` and `submit_intentions` are not here: they are answered where the run lives (the page
  * in API mode), not in the worker.
  */
 import { Schema } from "effect"
+import { CompanionStatus } from "./companion.ts"
 import { RunId, SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
 import { Run } from "./run.ts"
 import { RemovedItem, SavedItem } from "./savedItem.ts"
@@ -59,23 +61,31 @@ const ItemError = Schema.Union([ItemNotFound, StoreUnreadable, BrowserError])
 
 // ---------- the model's worker-side tools ----------
 
-export const TabToolRpcs = RpcGroup.make(
-  Rpc.make(ListTabs.name, {
-    payload: ListTabs.parametersSchema,
-    success: ListTabs.successSchema,
-    error: ToolError
-  }),
-  Rpc.make(ReadPages.name, {
-    payload: ReadPages.parametersSchema,
-    success: ReadPages.successSchema,
-    error: ToolError
-  }),
-  Rpc.make(WakeAndReadPages.name, {
-    payload: WakeAndReadPages.parametersSchema,
-    success: WakeAndReadPages.successSchema,
-    error: ToolError
-  })
-)
+/** `list_tabs`, as the worker serves it. The broker forwards the same request (broker.ts). */
+export const ListTabsRpc = Rpc.make(ListTabs.name, {
+  payload: ListTabs.parametersSchema,
+  success: ListTabs.successSchema,
+  error: ToolError
+})
+
+export const ReadPagesRpc = Rpc.make(ReadPages.name, {
+  payload: ReadPages.parametersSchema,
+  success: ReadPages.successSchema,
+  error: ToolError
+})
+
+export const WakeAndReadPagesRpc = Rpc.make(WakeAndReadPages.name, {
+  payload: WakeAndReadPages.parametersSchema,
+  success: WakeAndReadPages.successSchema,
+  error: ToolError
+})
+
+/**
+ * The model's worker-side tools. Served to extension pages (in `WorkerRpcs`) and, on its own, to
+ * the companion over the native-messaging port (companion.ts), so an MCP or ACP agent reaches the
+ * same `TabTools` with the same schemas.
+ */
+export const TabToolRpcs = RpcGroup.make(ListTabsRpc, ReadPagesRpc, WakeAndReadPagesRpc)
 
 // ---------- closing, undo, resume ----------
 
@@ -176,5 +186,17 @@ export const RunRpcs = RpcGroup.make(
   Rpc.make("set_run_reviewed", { payload: { id: RunId, reviewed: Schema.Boolean }, error: StoreError })
 )
 
+// ---------- the companion ----------
+
+export const CompanionRpcs = RpcGroup.make(
+  /**
+   * The worker's link to the companion (architecture A3), as stored in `chrome.storage.session`.
+   * When the companion isn't connected, this also tries to connect now (the worker doesn't retry
+   * on its own once it found the companion missing), so "Check again" after installing works
+   * without reloading the extension.
+   */
+  Rpc.make("check_companion", { success: CompanionStatus })
+)
+
 /** Everything the worker serves to extension pages. */
-export const WorkerRpcs = TabToolRpcs.merge(TabRpcs, StoreRpcs, RunRpcs)
+export const WorkerRpcs = TabToolRpcs.merge(TabRpcs, StoreRpcs, RunRpcs, CompanionRpcs)

@@ -10,8 +10,9 @@ export default defineConfig({
     description: "Close every tab without losing what it was for.",
     // Pins the extension ID for every unpacked install (see src/extensionId.ts).
     key: PUBLIC_KEY,
-    // M1 (API mode). nativeMessaging and alarms arrive with the companion broker in M2.
-    permissions: ["tabs", "tabGroups", "scripting", "storage", "sidePanel", "sessions"],
+    // nativeMessaging: the worker's one port to the companion's broker (architecture A3, M2).
+    // It connects only to the companion's own host name (core NATIVE_HOST_NAME).
+    permissions: ["tabs", "tabGroups", "scripting", "storage", "sidePanel", "sessions", "nativeMessaging"],
     // M1 reads any page the agent asks for. M4 moves this to optional_host_permissions,
     // requested at first run.
     host_permissions: ["<all_urls>"],

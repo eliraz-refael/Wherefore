@@ -1,7 +1,7 @@
 /**
  * Everything the extension keeps in `chrome.storage.local` (architecture A5).
  */
-import { defaultSettings, Run, type RunId, RunIndexEntry, SavedItem, Settings } from "@wherefore/core"
+import { defaultSettings, ProfileId, Run, type RunId, RunIndexEntry, SavedItem, Settings } from "@wherefore/core"
 import { Schema } from "effect"
 import type { StoreKey } from "./StoreKey.ts"
 
@@ -52,5 +52,26 @@ export const runIndexKey: StoreKey<ReadonlyArray<RunIndexEntry>> = {
   empty: []
 }
 
+/**
+ * This Chrome profile's id for the companion (core companion.ts): Chrome doesn't tell a native
+ * host which profile started it, so the worker makes a random id at its first connection and
+ * sends it every time. `undefined` until then. Kept in `local`, so it survives browser restarts
+ * and stays the same for as long as the extension is installed in this profile.
+ */
+export const profileKey: StoreKey<{ readonly id: ProfileId } | undefined> = {
+  name: "profile",
+  version: 1,
+  schema: Schema.UndefinedOr(Schema.Struct({ id: ProfileId })),
+  migrations: {},
+  empty: undefined
+}
+
 /** Every fixed key, for startup migration. Run keys are found through `runIndexKey`. */
-export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey, runIndexKey]
+export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey, runIndexKey, profileKey]
+
+/**
+ * The worker's link to the companion (core `CompanionStatus`), in `chrome.storage.session`: it
+ * describes this browser session only, so it is neither versioned nor kept across restarts. Only
+ * the worker writes it; views follow it with `StoreReader.watchCompanion`.
+ */
+export const companionStatusKey = "companion"

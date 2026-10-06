@@ -1,7 +1,7 @@
 /**
  * One fake browser for end-to-end tests: a worker that can be started, killed and started again
- * over the same tabs and storage, pages that talk to it over fake Ports, and the Web Locks the
- * pages and the worker share.
+ * over the same tabs and storage, pages that talk to it over fake Ports, the Web Locks the pages
+ * and the worker share, and the companion's native host.
  */
 import type { Run } from "@wherefore/core"
 import { Effect, Exit, Layer, Scope } from "effect"
@@ -11,6 +11,7 @@ import { listenForPorts, PortListener } from "../../src/messaging/server.ts"
 import { PortConnector, WorkerClient, type WorkerRpcTag, WorkerUnavailable } from "../../src/messaging/WorkerClient.ts"
 import type { FakeChrome } from "./chrome.ts"
 import { FakeLockManager } from "./locks.ts"
+import { FakeNativeHost } from "./native.ts"
 import { FakeOnConnect, type FakePort, portPair } from "./ports.ts"
 
 export const ORIGIN = "chrome-extension://test-extension/"
@@ -37,8 +38,12 @@ export class Harness {
    */
   failSaveRun: ((run: Run) => boolean) | undefined = undefined
 
-  constructor(chrome: FakeChrome) {
+  /** The companion's host, as `connectNative` finds it. Not installed unless a test says so. */
+  readonly native: FakeNativeHost
+
+  constructor(chrome: FakeChrome, native: FakeNativeHost = new FakeNativeHost("missing")) {
     this.chrome = chrome
+    this.native = native
   }
 
   readonly startWorker = Effect.suspend(() => {
@@ -50,7 +55,7 @@ export class Harness {
       this.workerScope = scope
       yield* Layer.buildWithScope(
         WorkerLayer.pipe(
-          Layer.provide([this.chrome.layer, this.locks.runLocks().layer, Layer.succeed(PortListener)(ports)])
+          Layer.provide([this.chrome.layer, this.locks.runLocks().layer, this.native.layer, Layer.succeed(PortListener)(ports)])
         ),
         scope
       )
