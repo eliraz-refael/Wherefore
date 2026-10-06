@@ -9,18 +9,25 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "build": "rolldown -c rolldown.config.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect/platform-node-shared": "4.0.0-rc.117",
     "@wherefore/core": "workspace:*",
     "effect": "4.0.0-rc.117"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.116",
     "@types/node": "22.20.4",
+    "rolldown": "1.2.9",
     "typescript": "7.0.2",
     "vite": "8.3.0",
     "vitest": "5.0.1"
+  },
+  "bin": {
+    "wherefore": "dist/cli.js"
   }
 }

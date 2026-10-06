@@ -125,6 +125,9 @@ importers:
 
   packages/companion:
     dependencies:
+      '@effect/platform-node-shared':
+        specifier: 4.0.0-rc.117
+        version: 4.0.0-rc.117(effect@4.0.0-rc.117)
       '@wherefore/core':
         specifier: workspace:*
         version: link:../core
@@ -138,6 +141,9 @@ importers:
       '@types/node':
         specifier: 22.20.4
         version: 22.20.4
+      rolldown:
+        specifier: 1.2.9
+        version: 1.2.9
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -285,6 +291,12 @@ packages:
       effect: ^4.0.0-rc.117
       react: '>=19.0.0 <20.0.0'
       scheduler: '>=0.25.0 <0.28.0'
+
+  '@effect/platform-node-shared@4.0.0-rc.117':
+    resolution: {integrity: sha512-GyRkEfLBG49MwJe+/XDPiXYcQ44RA9p2z0AurlsWhR1cd1PqOUMEZU1pORL+/R5hR8aH6ZuqoJYD8lAc6h+wlA==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      effect: ^4.0.0-rc.117
 
   '@effect/vitest@4.0.0-rc.116':
     resolution: {integrity: sha512-q42ue4hAa5AcPBwqi8rvMvR1Jstr+JjsyyxEBUoBk+WWm8otnqFxQ+XbWslW1QSwdg5+2Fdgd7z59IValt9Oiw==}
@@ -1421,6 +1433,15 @@ snapshots:
       effect: 4.0.0-rc.117
       react: 19.3.0
       scheduler: 0.27.0
+
+  '@effect/platform-node-shared@4.0.0-rc.117(effect@4.0.0-rc.117)':
+    dependencies:
+      '@types/ws': 8.18.1
+      effect: 4.0.0-rc.117
+      ws: 8.21.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@effect/vitest@4.0.0-rc.116(effect@4.0.0-rc.117)(vitest@5.0.1(@types/node@22.20.4)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.4)(jiti@2.7.0)))':
     dependencies:
