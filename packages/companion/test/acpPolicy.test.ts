@@ -6,7 +6,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { DEFAULT_AGENT_COMMAND, type ProfileId, type RunId } from "@wherefore/core"
 import type { RequestPermissionRequest, SessionConfigOption } from "../src/acp/AcpConnection.ts"
 import { agentMcpServer, mcpLauncher, RUN_ID_PATTERN, spawnPlan, splitCommand } from "../src/acp/command.ts"
-import { classifyFailure, decidePermission, defaultModeChange, flattenSettings, isWhereforeTool, lastLine, WHEREFORE_TOOLS } from "../src/acp/policy.ts"
+import { classifyFailure, decidePermission, modePlan, flattenSettings, isWhereforeTool, lastLine, WHEREFORE_TOOLS } from "../src/acp/policy.ts"
 
 const options: RequestPermissionRequest["options"] = [
   { optionId: "a1", name: "Allow", kind: "allow_once" },
@@ -101,10 +101,21 @@ describe("agent settings", () => {
     expect(flattenSettings(null)).toEqual([])
   })
 
-  it("puts the session back to the default permission mode when it starts in another", () => {
-    expect(defaultModeChange(offered)).toEqual({ id: "mode", value: "default" })
-    expect(defaultModeChange([{ ...offered[0]!, currentValue: "default" } as SessionConfigOption])).toBeUndefined()
-    expect(defaultModeChange(offered.slice(1))).toBeUndefined()
+  it("puts the session back to the default permission mode, and refuses a loose mode it can't change", () => {
+    expect(modePlan(offered, undefined)).toEqual({ _tag: "SetOption", id: "mode" })
+    expect(modePlan([{ ...offered[0]!, currentValue: "default" } as SessionConfigOption], undefined)).toEqual({ _tag: "Keep" })
+    expect(modePlan(offered.slice(1), undefined)).toEqual({ _tag: "Keep" })
+    const noDefault = { ...offered[0]!, options: [{ value: "bypassPermissions", name: "Bypass" }, { value: "plan", name: "Plan" }] } as SessionConfigOption
+    expect(modePlan([noDefault], undefined)).toEqual({ _tag: "Refuse", mode: "bypassPermissions" })
+    expect(modePlan([{ ...noDefault, currentValue: "plan" } as SessionConfigOption], undefined)).toEqual({ _tag: "Keep" })
+    // Agents that only report the older `modes`.
+    expect(modePlan([], { currentModeId: "yolo", availableModes: [{ id: "default" }, { id: "yolo" }] })).toEqual({ _tag: "SetMode" })
+    expect(modePlan([], { currentModeId: "yolo", availableModes: [{ id: "yolo" }] })).toEqual({ _tag: "Refuse", mode: "yolo" })
+    expect(modePlan([], { currentModeId: "default", availableModes: [] })).toEqual({ _tag: "Keep" })
+  })
+
+  it("leaves out option kinds it doesn't know", () => {
+    expect(flattenSettings([{ id: "x", name: "X", category: "model", type: "slider", currentValue: 1 } as unknown as SessionConfigOption])).toEqual([])
   })
 })
 
@@ -129,6 +140,9 @@ describe("failures", () => {
     })
     expect(windows).toMatchObject({ _tag: "AgentNotFound" })
     expect(windows.message).toContain("npx wasn't found")
+    // Localized cmd.exe: its exit code says it.
+    expect(classifyFailure({ command: DEFAULT_AGENT_COMMAND, phase: "starting", exit: { code: 9009 }, stderr: "Der Befehl ist falsch" })._tag)
+      .toBe("AgentNotFound")
     expect(classifyFailure({ command: custom, phase: "starting", exit: { code: 1 }, stderr: "npm error 404 Not Found\n\n" }).message)
       .toBe("The agent couldn't start the tidy-up: it exited with code 1: npm error 404 Not Found")
   })
@@ -157,7 +171,7 @@ describe("starting the agent and its MCP server", () => {
   })
 
   it("runs the command directly on POSIX, through cmd.exe on Windows (npx is npx.cmd there)", () => {
-    expect(spawnPlan("darwin", DEFAULT_AGENT_COMMAND)).toEqual({ program: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"], shell: false })
+    expect(spawnPlan("darwin", DEFAULT_AGENT_COMMAND)).toEqual({ program: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp@0.81.1"], shell: false })
     expect(spawnPlan("linux", "agent")).toEqual({ program: "agent", args: [], shell: false })
     expect(spawnPlan("win32", ` ${DEFAULT_AGENT_COMMAND} `)).toEqual({ program: DEFAULT_AGENT_COMMAND, args: [], shell: true })
     expect(spawnPlan("linux", "")).toBeUndefined()

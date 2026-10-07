@@ -16,6 +16,7 @@
  * - `crash`: list the tabs, then exit with code 3.
  * - `login`: refuse the session with ACP's `authRequired`.
  * - `nosubmit`: list the tabs and end the turn without submitting.
+ * - `loosemode`: start in "bypassPermissions" with no "default" mode to go back to.
  *
  * With `FAKE_AGENT_LOG` set, it appends what it saw and did there, one JSON object per line (the
  * session's MCP servers and `_meta`, settings changes, permission outcomes, child pids, cancels).
@@ -103,7 +104,9 @@ const configOptions = (model: string, effort: string, mode: string): Array<Acp.S
     category: "mode",
     type: "select",
     currentValue: mode,
-    options: [{ value: "default", name: "Default" }, { value: "bypassPermissions", name: "Bypass permissions" }]
+    options: scenario === "loosemode"
+      ? [{ value: "bypassPermissions", name: "Bypass permissions" }]
+      : [{ value: "default", name: "Default" }, { value: "bypassPermissions", name: "Bypass permissions" }]
   },
   {
     id: "model",

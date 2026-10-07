@@ -16,8 +16,11 @@ import type { Platform } from "../paths.ts"
 import { ChildProcess, ChildProcessSpawner } from "../unstable.ts"
 import { spawnPlan } from "./command.ts"
 
-/** How long the agent's tree gets after SIGTERM before SIGKILL. */
-export const KILL_GRACE = Duration.seconds(3)
+/**
+ * How long the agent's tree gets after SIGTERM before SIGKILL. Short, because Chrome kills the
+ * broker soon after it closes the port, and the tree must be gone by then.
+ */
+export const KILL_GRACE = Duration.seconds(1)
 
 /** How much of the agent's stderr is kept. */
 const STDERR_KEEP = 4096
@@ -95,6 +98,7 @@ const spawnWith = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) 
     })
 
     let stderr = ""
+    const stderrDone = yield* Deferred.make<void>()
     yield* handle.stderr.pipe(
       Stream.decodeText,
       Stream.runForEach((text) =>
@@ -103,6 +107,7 @@ const spawnWith = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) 
         })
       ),
       Effect.ignore,
+      Effect.ensuring(Deferred.succeed(stderrDone, undefined)),
       Effect.forkScoped
     )
 
@@ -117,7 +122,8 @@ const spawnWith = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) 
       pid: Number(handle.pid),
       input,
       output: Stream.toReadableStream(handle.stdout.pipe(Stream.catchCause(() => Stream.empty))),
-      exited: Deferred.await(exit),
+      // After the exit, stderr gets a moment to drain, so a failed start can say why.
+      exited: Effect.tap(Deferred.await(exit), () => Effect.ignore(Deferred.await(stderrDone).pipe(Effect.timeoutOption(Duration.millis(500))))),
       stderrTail: () => stderr
     } satisfies AgentProcess
   })

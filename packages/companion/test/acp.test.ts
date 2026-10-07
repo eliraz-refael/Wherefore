@@ -167,6 +167,16 @@ describe("ACP mode", () => {
       expect((error as { message: string }).message).toMatch(/^The agent stopped unexpectedly \(exit code 3\)/)
     }), 60_000)
 
+  it.live("refuses to run when the permission mode can't be set back to default (fail closed)", () =>
+    Effect.gen(function*() {
+      const { chrome, logged } = yield* acpChrome
+      const { events, error } = yield* runToEnd(chrome.startAgent("run-acp-11", fakeAgentCommand("loosemode")))
+      expect(error).toMatchObject({ _tag: "AgentFailed" })
+      expect((error as { message: string }).message).toContain('its permission mode ("bypassPermissions") skips permission requests')
+      expect(events.map((event) => event._tag)).toEqual(["Started"])
+      expect(logged().some((entry) => entry.event === "prompt")).toBe(false)
+    }), 60_000)
+
   it.live("reports an agent that isn't logged in", () =>
     Effect.gen(function*() {
       const { chrome } = yield* acpChrome
