@@ -184,7 +184,7 @@ describe("removeTab and restoreTab", () => {
     const { items, removal } = Option.getOrThrow(removeTab([a, b], b.id, { index: 1, url: "https://two.example/" }))
     expect(titles(items, "b")).toEqual(["one", "three"])
     expect(items[0]).toBe(a)
-    expect(removal).toEqual({ _tag: "TabRemoved", removed: { itemId: b.id, tab: tab("two"), index: 1 } })
+    expect(removal).toEqual({ _tag: "TabRemoved", removed: { itemId: b.id, tab: tab("two"), index: 1, copiesLeft: 0 } })
     if (removal._tag !== "TabRemoved") throw new Error("expected TabRemoved")
     expect(titles(restoreTab(items, removal.removed), "b")).toEqual(["one", "two", "three"])
     expect(() => encodeOk(TabRemoval, removal)).not.toThrow()
@@ -215,5 +215,14 @@ describe("removeTab and restoreTab", () => {
     expect(titles(restoreTab([shorter], removal.removed), "b")).toEqual(["one", "three"])
     expect(restoreTab([b], removal.removed)).toEqual([b])
     expect(restoreTab([a], removal.removed)).toEqual([a])
+  })
+
+  it("restores one copy of a URL the item holds twice, once", () => {
+    const twice = make("t", [tab("one"), tab("two"), tab("one")])
+    const { items, removal } = Option.getOrThrow(removeTab([twice], twice.id, { index: 2, url: "https://one.example/" }))
+    if (removal._tag !== "TabRemoved") throw new Error("expected TabRemoved")
+    const restored = restoreTab(items, removal.removed)
+    expect(titles(restored, "t")).toEqual(["one", "two", "one"])
+    expect(restoreTab(restored, removal.removed)).toBe(restored)
   })
 })

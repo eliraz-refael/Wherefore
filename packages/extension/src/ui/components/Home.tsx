@@ -185,12 +185,15 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
   )
 }
 
-/** Where focus goes when an item leaves the list: the next item, else the screen title. */
-const focusAfterLeaving = (id: string) => {
+/**
+ * Where focus goes when an item leaves the list: the next item, else the screen title. Read it
+ * while the item is still rendered.
+ */
+const focusAfterLeaving = (id: string): string => {
   const toggles = [...document.querySelectorAll<HTMLElement>("[data-item-toggle]")]
   const index = toggles.findIndex((toggle) => toggle.dataset.itemToggle === id)
   const next = toggles[index + 1] ?? toggles[index - 1]
-  focusSoon(next === undefined ? "[data-screen-heading]" : `[data-item-toggle="${next.dataset.itemToggle}"]`)
+  return next === undefined ? "[data-screen-heading]" : `[data-item-toggle="${next.dataset.itemToggle}"]`
 }
 
 function ListItem(props: {
@@ -209,21 +212,25 @@ function ListItem(props: {
 
   const leave = async <E,>(action: PanelEffect<Done, E>) => {
     setBusy(true)
-    focusAfterLeaving(item.id)
+    focusSoon(focusAfterLeaving(item.id))
     const done = await act(action, (result) => result)
     if (done._tag === "None") setBusy(false)
   }
 
-  // Focus moves on to the next tab's ×, else the previous one's; the last tab takes the item with it.
+  // Focus moves on to the next tab's ×, else the previous one's; when the worker says the item went
+  // with its last tab, it moves on as if the item had left. A failure keeps focus on this ×.
   const removeIdPrefix = `${detailsId}-remove-`
   const dropTab = async (index: number) => {
     const tab = item.tabs[index]
     if (tab === undefined) return
-    if (item.tabs.length === 1) return leave(removeTab(item, tab, index))
+    const keys = tabKeys(item.tabs)
+    const afterLeaving = focusAfterLeaving(item.id)
     setBusy(true)
     const done = await act(removeTab(item, tab, index), (result) => result)
+    if (done._tag === "Some" && done.value.removal._tag === "ItemRemoved") return focusSoon(afterLeaving)
     setBusy(false)
-    if (done._tag === "None") return
+    if (done._tag === "None") return focusIdSoon(`${removeIdPrefix}${keys[index]}`)
+    // Keys of what is left: a second copy of a URL becomes the first.
     const rest = tabKeys(item.tabs.filter((_, i) => i !== index))
     const next = rest[Math.min(index, rest.length - 1)]
     if (next !== undefined) focusIdSoon(`${removeIdPrefix}${next}`)
@@ -315,7 +322,6 @@ export function TabLinks({ tabs, remove }: {
     <ul className="wf-tabs">
       {tabs.map((tab, index) => {
         const domain = tab.domain === "" ? displayDomain(tab.url) : tab.domain
-        const key = keys[index] ?? `${index}:${tab.url}`
         const body = (
           <>
             <SiteBadge domain={domain} />
@@ -323,14 +329,14 @@ export function TabLinks({ tabs, remove }: {
           </>
         )
         return (
-          <li key={key} className={remove === undefined ? undefined : "wf-tab-row"}>
+          <li key={keys[index]} className={remove === undefined ? undefined : "wf-tab-row"}>
             {isWebUrl(tab.url)
               ? <a className="wf-tab" href={tab.url} target="_blank" rel="noreferrer" title="Open this tab">{body}</a>
               : <span className="wf-tab">{body}</span>}
             {remove === undefined ? null : (
               <button
                 type="button"
-                id={`${remove.idPrefix}${key}`}
+                id={`${remove.idPrefix}${keys[index]}`}
                 className="wf-tab-remove"
                 aria-label={`Remove ${tab.title === "" ? domain : tab.title}`}
                 title="Remove from this item"

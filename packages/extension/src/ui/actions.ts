@@ -15,6 +15,7 @@ import {
   SavedItemId,
   type SavedTab,
   type Settings,
+  type TabRemoval,
   type TabId,
   type UndoResult,
   type UndoToken
@@ -198,7 +199,7 @@ export const removeItem = (item: SavedItem) =>
 
 /**
  * Removes one tab from the item (the browser tab, if open, stays as it is), with undo. Its last
- * tab removes the item, and Undo brings the item back with it.
+ * tab removes the item, and Undo brings the item back with it. `removal` says which happened.
  */
 export const removeTab = (item: SavedItem, tab: SavedTab, index: number) =>
   Effect.gen(function*() {
@@ -207,14 +208,16 @@ export const removeTab = (item: SavedItem, tab: SavedTab, index: number) =>
     const title = tab.title === "" ? tab.url : tab.title
     if (removal._tag === "ItemRemoved") {
       return {
+        removal,
         message: `Removed “${item.task}” with its last tab.`,
         undo: undoing(Effect.as(client.call("restore_item", { removed: removal.removed }), `“${item.task}” is back on your list.`))
-      } satisfies Done
+      } satisfies Done & { readonly removal: TabRemoval }
     }
     return {
+      removal,
       message: `Removed “${title}” from “${item.task}”.`,
       undo: undoing(Effect.as(client.call("restore_tab", { removed: removal.removed }), `“${title}” is back in “${item.task}”.`))
-    } satisfies Done
+    } satisfies Done & { readonly removal: TabRemoval }
   })
 
 /** Open: reopens the item's tabs in this window, as a tab group named after the task. */

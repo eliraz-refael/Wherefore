@@ -160,11 +160,16 @@ export const restoreItem = (items: ReadonlyArray<SavedItem>, removed: RemovedIte
   return [...items.slice(0, index), removed.item, ...items.slice(index)]
 }
 
-/** A tab removed from an item and where it was, so `restoreTab` can put it back. */
+/**
+ * A tab removed from an item and where it was, so `restoreTab` can put it back. `copiesLeft` is how
+ * many tabs with its URL the item still had, so an item may hold the same URL twice and undo still
+ * knows whether this copy is back.
+ */
 export const RemovedTab = Schema.Struct({
   itemId: SavedItemId,
   tab: SavedTab,
-  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  copiesLeft: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 })
 export type RemovedTab = typeof RemovedTab.Type
 
@@ -199,17 +204,21 @@ export const removeTab = (
   }
   return Option.some({
     items: items.map((saved) => (saved.id === id ? { ...saved, tabs: rest } : saved)),
-    removal: { _tag: "TabRemoved", removed: { itemId: id, tab: removedTab, index } }
+    removal: {
+      _tag: "TabRemoved",
+      removed: { itemId: id, tab: removedTab, index, copiesLeft: rest.filter((saved) => saved.url === tab.url).length }
+    }
   })
 }
 
 /**
  * Undoes `removeTab`: puts the tab back where it was in its item (clamped to the item's current
- * tabs). A no-op when the item is gone or already has a tab with that URL.
+ * tabs). A no-op when the item is gone or this copy of the URL is already back.
  */
 export const restoreTab = (items: ReadonlyArray<SavedItem>, removed: RemovedTab): ReadonlyArray<SavedItem> => {
   const item = items.find((item) => item.id === removed.itemId)
-  if (item === undefined || item.tabs.some((tab) => tab.url === removed.tab.url)) return items
+  if (item === undefined) return items
+  if (item.tabs.filter((tab) => tab.url === removed.tab.url).length > removed.copiesLeft) return items
   const index = Math.min(Math.max(removed.index, 0), item.tabs.length)
   const tabs = [...item.tabs.slice(0, index), removed.tab, ...item.tabs.slice(index)]
   return items.map((saved) => (saved.id === removed.itemId ? { ...saved, tabs } : saved))
