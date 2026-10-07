@@ -9,8 +9,11 @@ import {
   type SavedTab,
   markDone,
   removeItem,
+  removeTab,
   reopen,
   restoreItem,
+  restoreTab,
+  TabRemoval,
   trackerTypeLabel
 } from "../src/index.ts"
 import { decodeOk, encodeOk, rejects } from "./helpers.ts"
@@ -167,5 +170,50 @@ describe("removeItem and restoreItem", () => {
     const { removed } = Option.getOrThrow(removeItem([a, b, c], c.id))
     expect(ids(restoreItem([a], removed))).toEqual(["a", "c"])
     expect(ids(restoreItem([a, c], removed))).toEqual(["a", "c"])
+  })
+})
+
+describe("removeTab and restoreTab", () => {
+  const tab = (name: string): SavedTab => ({ title: name, url: `https://${name}.example/`, domain: `${name}.example` })
+  const make = (id: string, tabs: ReadonlyArray<SavedTab>) => decodeOk(SavedItem, { ...storedItem, id, tabs })
+  const a = make("a", [tab("one")])
+  const b = make("b", [tab("one"), tab("two"), tab("three")])
+  const titles = (items: ReadonlyArray<SavedItem>, id: string) => items.find((item) => item.id === id)?.tabs.map((t) => t.title)
+
+  it("deletes one tab and puts it back where it was; other items are untouched", () => {
+    const { items, removal } = Option.getOrThrow(removeTab([a, b], b.id, { index: 1, url: "https://two.example/" }))
+    expect(titles(items, "b")).toEqual(["one", "three"])
+    expect(items[0]).toBe(a)
+    expect(removal).toEqual({ _tag: "TabRemoved", removed: { itemId: b.id, tab: tab("two"), index: 1 } })
+    if (removal._tag !== "TabRemoved") throw new Error("expected TabRemoved")
+    expect(titles(restoreTab(items, removal.removed), "b")).toEqual(["one", "two", "three"])
+    expect(() => encodeOk(TabRemoval, removal)).not.toThrow()
+  })
+
+  it("finds the tab by URL when the index is stale", () => {
+    const { items } = Option.getOrThrow(removeTab([b], b.id, { index: 0, url: "https://three.example/" }))
+    expect(titles(items, "b")).toEqual(["one", "two"])
+  })
+
+  it("removing the last tab removes the item, which restoreItem brings back with its tab", () => {
+    const { items, removal } = Option.getOrThrow(removeTab([a, b], a.id, { index: 0, url: "https://one.example/" }))
+    expect(items.map((item) => item.id)).toEqual(["b"])
+    expect(removal).toEqual({ _tag: "ItemRemoved", removed: { item: a, index: 0 } })
+    if (removal._tag !== "ItemRemoved") throw new Error("expected ItemRemoved")
+    expect(restoreItem(items, removal.removed)).toEqual([a, b])
+  })
+
+  it("is None for an unknown item or tab", () => {
+    expect(Option.isNone(removeTab([a], decodeOk(SavedItemId, "zzz"), { index: 0, url: "https://one.example/" }))).toBe(true)
+    expect(Option.isNone(removeTab([a], a.id, { index: 0, url: "https://nope.example/" }))).toBe(true)
+  })
+
+  it("restores at the end when the item got shorter, never duplicates, and ignores a gone item", () => {
+    const { removal } = Option.getOrThrow(removeTab([b], b.id, { index: 2, url: "https://three.example/" }))
+    if (removal._tag !== "TabRemoved") throw new Error("expected TabRemoved")
+    const shorter = make("b", [tab("one")])
+    expect(titles(restoreTab([shorter], removal.removed), "b")).toEqual(["one", "three"])
+    expect(restoreTab([b], removal.removed)).toEqual([b])
+    expect(restoreTab([a], removal.removed)).toEqual([a])
   })
 })

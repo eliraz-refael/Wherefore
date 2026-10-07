@@ -6,7 +6,8 @@
  *
  * An item is `open` until the user marks it done: its tabs close and it moves to the Done
  * archive, keeping its tabs, title and `doneAt`. Removing an item deletes it outright (no
- * status, no archive); `removeItem` / `restoreItem` let the UI undo that.
+ * status, no archive); `removeItem` / `restoreItem` let the UI undo that. `removeTab` /
+ * `restoreTab` do the same for one of an item's tabs; removing its last tab removes the item.
  */
 import { Data, DateTime, Option, Schema } from "effect"
 import { SavedItemId } from "./ids.ts"
@@ -157,4 +158,59 @@ export const restoreItem = (items: ReadonlyArray<SavedItem>, removed: RemovedIte
   if (items.some((item) => item.id === removed.item.id)) return items
   const index = Math.min(Math.max(removed.index, 0), items.length)
   return [...items.slice(0, index), removed.item, ...items.slice(index)]
+}
+
+/** A tab removed from an item and where it was, so `restoreTab` can put it back. */
+export const RemovedTab = Schema.Struct({
+  itemId: SavedItemId,
+  tab: SavedTab,
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+})
+export type RemovedTab = typeof RemovedTab.Type
+
+/**
+ * What removing one tab did: `TabRemoved` (undo with `restoreTab`), or, when it was the item's
+ * last tab, `ItemRemoved`: the whole item is gone (undo with `restoreItem`; it keeps its tab).
+ */
+export const TabRemoval = Schema.Union([
+  Schema.TaggedStruct("TabRemoved", { removed: RemovedTab }),
+  Schema.TaggedStruct("ItemRemoved", { removed: RemovedItem })
+])
+export type TabRemoval = typeof TabRemoval.Type
+
+/**
+ * Deletes one tab from an item: the tab at `index` if its URL is `url`, else the first tab with
+ * that URL (the list may have changed since the caller looked). `None` when no item has that id
+ * or it has no such tab.
+ */
+export const removeTab = (
+  items: ReadonlyArray<SavedItem>,
+  id: SavedItemId,
+  tab: { readonly index: number; readonly url: string }
+): Option.Option<{ readonly items: ReadonlyArray<SavedItem>; readonly removal: TabRemoval }> => {
+  const item = items.find((item) => item.id === id)
+  if (item === undefined) return Option.none()
+  const index = item.tabs[tab.index]?.url === tab.url ? tab.index : item.tabs.findIndex((saved) => saved.url === tab.url)
+  const removedTab = item.tabs[index]
+  if (removedTab === undefined) return Option.none()
+  const rest = item.tabs.filter((_, i) => i !== index)
+  if (rest.length === 0) {
+    return Option.map(removeItem(items, id), ({ items, removed }) => ({ items, removal: { _tag: "ItemRemoved", removed } }))
+  }
+  return Option.some({
+    items: items.map((saved) => (saved.id === id ? { ...saved, tabs: rest } : saved)),
+    removal: { _tag: "TabRemoved", removed: { itemId: id, tab: removedTab, index } }
+  })
+}
+
+/**
+ * Undoes `removeTab`: puts the tab back where it was in its item (clamped to the item's current
+ * tabs). A no-op when the item is gone or already has a tab with that URL.
+ */
+export const restoreTab = (items: ReadonlyArray<SavedItem>, removed: RemovedTab): ReadonlyArray<SavedItem> => {
+  const item = items.find((item) => item.id === removed.itemId)
+  if (item === undefined || item.tabs.some((tab) => tab.url === removed.tab.url)) return items
+  const index = Math.min(Math.max(removed.index, 0), item.tabs.length)
+  const tabs = [...item.tabs.slice(0, index), removed.tab, ...item.tabs.slice(index)]
+  return items.map((saved) => (saved.id === removed.itemId ? { ...saved, tabs } : saved))
 }
