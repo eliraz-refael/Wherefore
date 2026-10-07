@@ -170,18 +170,17 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
       Effect.gen(function*() {
         const callId = `${tool}:${nextStep++}`
         yield* addStep(part, { kind: "tool", at: yield* DateTime.now, callId, tool, status: "running", summary: running })
-        const exit = yield* Effect.exit(body)
         const finish = (status: "ok" | "error", summary: string) =>
           save(part, (run) => ({
             ...run,
             steps: run.steps.map((step) => (step.kind === "tool" && step.callId === callId ? { ...step, status, summary } : step))
           }))
-        if (Exit.isSuccess(exit)) yield* finish("ok", done(exit.value))
-        else {
+        // Also when the call is cancelled (the client's notifications/cancelled): the step reads "Stopped".
+        return yield* body.pipe(Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return finish("ok", done(exit.value))
           const error = Cause.findErrorOption(exit.cause)
-          yield* finish("error", error._tag === "Some" ? failed(error.value) : "Stopped")
-        }
-        return yield* exit
+          return finish("error", error._tag === "Some" ? failed(error.value) : "Stopped")
+        }))
       })
 
     // ---------- the triage ----------
@@ -303,6 +302,8 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
           )
           opened.push(part)
           current.runs.set(broker.profileId, part)
+          // A profile that disconnected and came back takes part again.
+          current.gone.delete(broker.profileId)
         }
         current.inFlight++
         return current
