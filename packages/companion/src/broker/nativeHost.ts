@@ -11,14 +11,19 @@
  *    `effect/unstable/rpc` (`BrokerRpcs`, core broker.ts). Tool calls and companion-run calls are
  *    forwarded to the service worker over the native port (`WorkerLink`). Then the broker is
  *    registered, with a random access token every request must carry (`BROKER_TOKEN_HEADER`).
- * 4. **Shutdown.** When Chrome closes the port (stdin ends) or a signal arrives (the CLI
+ * 4. **Agents (M2 PR C).** The worker calls the broker too, on the same port (`ToBroker` frames):
+ *    `AgentRpcs` (core agent.ts), to start an ACP agent for a run the panel created (src/acp/).
+ *    The agent lives as long as that call: Stop interrupts it, and so does the port closing.
+ * 5. **Shutdown.** When Chrome closes the port (stdin ends) or a signal arrives (the CLI
  *    interrupts this effect): calls in flight fail with `ExtensionUnavailable` and get a moment
- *    to reach their clients, then the registry entry and the socket are removed.
+ *    to reach their clients, agents are stopped (their whole process trees), then the registry
+ *    entry and the socket are removed.
  *
  * Stdout is the Chrome channel and carries nothing but frames (NativePort.ts). Logs go to
  * stderr, and never include tool payloads (page text) or results.
  */
 import {
+  AgentRpcs,
   BROKER_TOKEN_HEADER,
   BrokerRpcs,
   BrokerUnauthorized,
@@ -27,15 +32,27 @@ import {
   NATIVE_PROTOCOL_VERSION,
   type NativeHello,
   type ProfileId,
+  type RpcFromClient,
   type RpcFromServer,
   ToolError
 } from "@wherefore/core"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import * as Fs from "node:fs/promises"
 import { Deferred, Duration, Effect, Layer, Queue, Schema, type Stdio, Stream } from "effect"
+import { AgentProcesses } from "../acp/AgentProcess.ts"
+import { runAgent } from "../acp/AgentRun.ts"
+import { mcpLauncher } from "../acp/command.ts"
 import { makeNativePort } from "../native/NativePort.ts"
 import { isUnixSocketPathTooLong, type Location, socketPath } from "../paths.ts"
-import { NodeSocketServer, RpcSerialization, RpcServer } from "../unstable.ts"
+import {
+  type ChildProcessSpawner,
+  NodeSocketServer,
+  type Rpc,
+  type RpcGroup,
+  type RpcMessage,
+  RpcSerialization,
+  RpcServer
+} from "../unstable.ts"
 import { liveDeps, makeRegistry, type RegistryDeps, type RegistryEntry } from "./registry.ts"
 import { makeWorkerLink, PORT_CLOSED, type WorkerLink } from "./WorkerLink.ts"
 
@@ -59,6 +76,13 @@ export interface NativeHostOptions {
   readonly helloTimeout?: Duration.Input
   /** Registry checks; the real process table and sockets by default. */
   readonly registry?: RegistryDeps
+  /**
+   * What the agent's MCP server runs (`wherefore mcp`): the wrapper's pinned Node and CLI
+   * (`WHEREFORE_NODE`, `WHEREFORE_CLI`), else this process's own.
+   */
+  readonly mcp?: { readonly node: string; readonly cli: string }
+  /** The agent's environment; the companion's own by default. */
+  readonly env?: Readonly<Record<string, string | undefined>>
 }
 
 /** The caller's origin, from Chrome's arguments. */
@@ -119,7 +143,49 @@ const serveBroker = (
   )
 }
 
-export const runNativeHost = (options: NativeHostOptions): Effect.Effect<void, CallerRejected | BrokerStartFailed, Stdio.Stdio> =>
+/**
+ * The broker's RPC server for the worker's calls (`AgentRpcs`) on the native port: requests arrive
+ * in `requests` (from `ToBroker` frames), replies go out as `FromBroker` frames. The port's only
+ * client is the worker; when the port closes, its calls are interrupted (their agents stopped).
+ */
+const serveWorkerCalls = (
+  send: (frame: unknown) => Effect.Effect<void, unknown>,
+  requests: Queue.Dequeue<RpcFromClient | typeof PORT_CLOSED>,
+  handlers: Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof AgentRpcs>>>
+) =>
+  Effect.gen(function*() {
+    const protocol = yield* RpcServer.Protocol.make((writeRequest) =>
+      Effect.gen(function*() {
+        const disconnects = yield* Queue.unbounded<number>()
+        yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(requests), (request) =>
+          request === PORT_CLOSED ? Queue.offer(disconnects, 0) : writeRequest(0, request as RpcMessage.FromClientEncoded))))
+        return {
+          disconnects,
+          send: (_clientId, response) =>
+            send({ _tag: "FromBroker", rpc: response }).pipe(
+              Effect.catch(() => Effect.logWarning("native host: a reply to the extension was too large to send"))
+            ),
+          end: () => Effect.void,
+          clientIds: Effect.succeed(new Set([0])),
+          initialMessage: Effect.succeedNone,
+          supportsAck: true,
+          supportsTransferables: false,
+          supportsSpanPropagation: false,
+          supportsNotifications: false,
+          codecFor: RpcSerialization.json.codecFor
+        }
+      })
+    )
+    yield* RpcServer.make(AgentRpcs, { disableTracing: true, disableFatalDefects: true }).pipe(
+      Effect.provideService(RpcServer.Protocol, protocol),
+      Effect.provide(handlers),
+      Effect.forkScoped
+    )
+  })
+
+export const runNativeHost = (
+  options: NativeHostOptions
+): Effect.Effect<void, CallerRejected | BrokerStartFailed, Stdio.Stdio | ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.scoped(Effect.gen(function*() {
     const caller = callerOf(options.args)
     if (caller !== EXTENSION_ORIGIN) return yield* new CallerRejected({ origin: caller ?? "(none)" })
@@ -130,20 +196,26 @@ export const runNativeHost = (options: NativeHostOptions): Effect.Effect<void, C
     const hello = yield* Deferred.make<NativeHello>()
     const ended = yield* Deferred.make<string>()
     const inbox = yield* Queue.unbounded<RpcFromServer | typeof PORT_CLOSED>()
+    const workerCalls = yield* Queue.unbounded<RpcFromClient | typeof PORT_CLOSED>()
 
     yield* port.incoming.pipe(
       Stream.runForEach((raw) => {
         const frame = decodeFrame(raw)
         if (frame._tag === "Failure") return Effect.logWarning("native host: dropped a malformed message from the extension")
-        return frame.value._tag === "Hello"
-          ? Effect.asVoid(Deferred.succeed(hello, frame.value))
-          : Effect.asVoid(Queue.offer(inbox, frame.value.rpc))
+        switch (frame.value._tag) {
+          case "Hello":
+            return Effect.asVoid(Deferred.succeed(hello, frame.value))
+          case "FromWorker":
+            return Effect.asVoid(Queue.offer(inbox, frame.value.rpc))
+          case "ToBroker":
+            return Effect.asVoid(Queue.offer(workerCalls, frame.value.rpc))
+        }
       }),
       Effect.match({
         onSuccess: () => "Chrome closed the port",
         onFailure: (error) => `the port failed: ${error.message}`
       }),
-      Effect.tap(() => Queue.offer(inbox, PORT_CLOSED)),
+      Effect.tap(() => Effect.andThen(Queue.offer(inbox, PORT_CLOSED), Queue.offer(workerCalls, PORT_CLOSED))),
       Effect.flatMap((reason) => Deferred.succeed(ended, reason)),
       Effect.forkScoped
     )
@@ -182,6 +254,25 @@ export const runNativeHost = (options: NativeHostOptions): Effect.Effect<void, C
     if (unix) yield* Effect.promise(() => Fs.rm(socket, { force: true }).catch(() => undefined))
 
     const link = yield* makeWorkerLink({ send: port.send, inbox })
+    const agents = yield* Layer.build(AgentProcesses.layer)
+    const mcp = options.mcp ?? mcpLauncher(process.env, { node: process.execPath, cli: process.argv[1] ?? "" })
+    yield* serveWorkerCalls(
+      port.send,
+      workerCalls,
+      AgentRpcs.toLayer(AgentRpcs.of({
+        start_agent: ({ runId, command, prefs }) =>
+          runAgent({
+            runId,
+            command,
+            prefs,
+            profile: profileId,
+            location: options.location,
+            companionVersion: options.companionVersion,
+            mcp,
+            env: options.env ?? process.env
+          }).pipe(Stream.provideContext(agents))
+      }))
+    )
     let inFlight = 0
     const track = <A, E>(effect: Effect.Effect<A, E>) =>
       Effect.acquireUseRelease(Effect.sync(() => inFlight++), () => effect, () => Effect.sync(() => inFlight--))
