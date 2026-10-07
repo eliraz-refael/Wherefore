@@ -300,3 +300,18 @@ export const planUninstall = (location: Location): UninstallPlan => {
   }
   return { files, commands }
 }
+
+/** Quotes an argument for the user's shell when it needs it (POSIX shells, or cmd/PowerShell). */
+const shellArg = (platform: Platform, text: string): string =>
+  /^[A-Za-z0-9_./:\\=@+-]+$/.test(text)
+    ? text
+    : platform === "win32"
+    ? `"${text}"`
+    : `'${text.replaceAll("'", "'\\''")}'`
+
+/**
+ * The Claude Code command that registers the companion's MCP server for every project (user
+ * scope), with the same pinned Node as the native host wrapper.
+ */
+export const claudeMcpAdd = (platform: Platform, node: string, cli: string): string =>
+  `claude mcp add --scope user wherefore -- ${shellArg(platform, node)} ${shellArg(platform, cli)} mcp`
