@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest"
 import { DateTime } from "effect"
 import {
   addUsage,
+  AGENT_GONE_MESSAGE,
+  cancelRun,
   emptyUsage,
   estimateCostUsd,
   interruptRun,
@@ -10,6 +12,8 @@ import {
   RunId,
   type RunIndexEntry,
   setReviewed,
+  STOPPED_STEP,
+  UNKNOWN_MODEL,
   upsertRunIndex
 } from "../src/index.ts"
 import { decodeOk, encodeOk, rejects } from "./helpers.ts"
@@ -115,6 +119,36 @@ describe("interruptRun", () => {
 
     const done: Run = { ...run, status: "succeeded", finishedAt: at("2026-10-05T09:01:00.000Z") }
     expect(interruptRun(done, at("2026-10-05T10:00:00.000Z"))).toBe(done)
+  })
+
+  it("says the agent went away for MCP and ACP runs, and stops tool steps still running", () => {
+    const run = decodeOk(Run, {
+      ...wireRun,
+      mode: "mcp",
+      model: UNKNOWN_MODEL,
+      agent: "claude-code",
+      steps: [{ kind: "tool", at: "2026-10-05T09:00:01.000Z", callId: "c1", tool: "read_pages", status: "running", summary: "Reading 2 pages" }]
+    })
+    const interrupted = interruptRun(run, at("2026-10-05T10:00:00.000Z"))
+    expect(interrupted.error).toEqual({ reason: "interrupted", message: AGENT_GONE_MESSAGE })
+    expect(interrupted.steps[0]).toMatchObject({ status: "error", summary: STOPPED_STEP })
+    expect(interrupted.agent).toBe("claude-code")
+    expect(rejects(Run, encodeOk(Run, interrupted))).toBe(false)
+  })
+})
+
+describe("cancelRun", () => {
+  it("marks a running run cancelled, without an error, and leaves finished runs alone", () => {
+    const run = decodeOk(Run, { ...wireRun, mode: "acp", model: UNKNOWN_MODEL })
+    const cancelled = cancelRun(run, at("2026-10-05T10:00:00.000Z"))
+    expect(cancelled).toMatchObject({ status: "cancelled", mode: "acp" })
+    expect(cancelled.error).toBeUndefined()
+    expect(rejects(Run, encodeOk(Run, cancelled))).toBe(false)
+    expect(cancelRun(cancelled, at("2026-10-05T11:00:00.000Z"))).toBe(cancelled)
+  })
+
+  it("rejects modes it doesn't know", () => {
+    expect(rejects(Run, { ...wireRun, mode: "batch" })).toBe(true)
   })
 })
 

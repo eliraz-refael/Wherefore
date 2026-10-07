@@ -1,17 +1,26 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 import {
+  AskPanelRpc,
+  BrokeredAskPanelError,
+  BrokeredOpenRunError,
+  BrokeredUpdateRunError,
   BrokerRpcs,
   BrokeredToolError,
+  CompanionRunRpcs,
+  CompanionWorkerRpcs,
   CompanionStatus,
   EXTENSION_ID,
   EXTENSION_ORIGIN,
   ExtensionToHost,
   HostToExtension,
   NATIVE_HOST_NAME,
+  OpenRunRpc,
   ProfileId,
   profileIdFromBytes,
-  TabToolRpcs
+  RunSignal,
+  TabToolRpcs,
+  UpdateRunRpc
 } from "../src/index.ts"
 import { decodeOk, rejects } from "./helpers.ts"
 
@@ -71,13 +80,48 @@ describe("BrokerRpcs", () => {
       expect(brokered?.successSchema).toBe(rpc.successSchema)
       expect(brokered?.errorSchema).toBe(BrokeredToolError)
     }
-    expect([...BrokerRpcs.requests.keys()]).toEqual(["broker_info", "list_tabs", "read_pages", "wake_and_read_pages"])
+    expect([...BrokerRpcs.requests.keys()]).toEqual([
+      "broker_info",
+      ...CompanionWorkerRpcs.requests.keys()
+    ])
+    expect([...CompanionWorkerRpcs.requests.keys()]).toEqual([
+      "list_tabs",
+      "read_pages",
+      "wake_and_read_pages",
+      "open_run",
+      "update_run",
+      "ask_panel"
+    ])
   })
 
-  it("decodes both forwarding errors", () => {
+  it("forwards the companion-run requests with the same payloads and successes", () => {
+    for (const [tag, rpc] of CompanionRunRpcs.requests) {
+      const brokered = BrokerRpcs.requests.get(tag)
+      expect(brokered?.payloadSchema).toBe(rpc.payloadSchema)
+    }
+    expect(BrokerRpcs.requests.get(UpdateRunRpc._tag)?.errorSchema).toBe(BrokeredUpdateRunError)
+    expect(BrokerRpcs.requests.get(AskPanelRpc._tag)?.successSchema).toBe(AskPanelRpc.successSchema)
+    expect(BrokerRpcs.requests.get(AskPanelRpc._tag)?.errorSchema).toBe(BrokeredAskPanelError)
+    // open_run is a stream: its error lives in the stream schema.
+    expect(OpenRunRpc.payloadSchema).toBe(BrokerRpcs.requests.get(OpenRunRpc._tag)?.payloadSchema)
+    const decode = Schema.decodeUnknownSync(BrokeredOpenRunError)
+    expect(decode({ _tag: "RunAlreadyActive", source: "api" })).toMatchObject({ _tag: "RunAlreadyActive", source: "api" })
+    expect(decode({ _tag: "MessageTooLarge", bytes: 2, limit: 1 })._tag).toBe("MessageTooLarge")
+    expect(Schema.decodeUnknownSync(RunSignal)({ _tag: "Stopped", message: "x" })).toEqual({ _tag: "Stopped", message: "x" })
+  })
+
+  it("decodes the forwarding errors", () => {
     const decode = Schema.decodeUnknownSync(BrokeredToolError)
     expect(decode({ _tag: "ToolError", message: "x" })._tag).toBe("ToolError")
     expect(decode({ _tag: "ExtensionUnavailable", message: "gone" })._tag).toBe("ExtensionUnavailable")
+    expect(decode({ _tag: "BrokerUnauthorized", message: "no" })._tag).toBe("BrokerUnauthorized")
+  })
+
+  it("only opens runs for the companion's modes", () => {
+    const payload = Schema.decodeUnknownExit(OpenRunRpc.payloadSchema)
+    expect(payload({ id: "r1", mode: "mcp" })._tag).toBe("Success")
+    expect(payload({ id: "r1", mode: "acp" })._tag).toBe("Success")
+    expect(payload({ id: "r1", mode: "api" })._tag).toBe("Failure")
   })
 })
 

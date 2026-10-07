@@ -19,9 +19,22 @@ export const RunStatus = Schema.Literals([
   "succeeded",
   "failed",
   "cancelled", // the user stopped it
-  "interrupted" // the page running it closed before it finished
+  "interrupted" // whatever ran it (its page, or its agent's connection) went away before it finished
 ])
 export type RunStatus = typeof RunStatus.Type
+
+/**
+ * Where a run runs (architecture A4):
+ * - `api`: the API-mode agent, in the extension page that started it.
+ * - `mcp`: an MCP client (e.g. Claude Code) calling the companion's MCP server.
+ * - `acp`: an agent the side panel started through the companion (M2 PR C).
+ */
+export const RunMode = Schema.Literals(["api", "mcp", "acp"])
+export type RunMode = typeof RunMode.Type
+
+/** The modes whose runs the companion drives (and the worker stores for it). */
+export const CompanionRunMode = Schema.Literals(["mcp", "acp"])
+export type CompanionRunMode = typeof CompanionRunMode.Type
 
 /** Tokens used by one or more model requests. */
 export const TokenUsage = Schema.Struct({
@@ -113,7 +126,7 @@ export const RunErrorReason = Schema.Literals([
   "no_submission", // the model kept stopping without submitting
   "worker", // the extension's background worker failed
   "storage", // stored data couldn't be read
-  "interrupted", // the page running it closed
+  "interrupted", // the page or agent running it went away
   "unexpected"
 ])
 export type RunErrorReason = typeof RunErrorReason.Type
@@ -134,9 +147,14 @@ export type RunUsage = typeof RunUsage.Type
 
 export const Run = Schema.Struct({
   id: RunId,
-  mode: Schema.Literal("api"),
-  /** The model id the run used. */
+  mode: RunMode,
+  /** The model id the run used. MCP and ACP runs don't see the model: `unknown`. */
   model: Schema.String,
+  /**
+   * Who ran it, for MCP and ACP runs: the agent's name as it introduced itself (an MCP client's
+   * `clientInfo`), e.g. "claude-code". Absent for API-mode runs.
+   */
+  agent: Schema.optionalKey(Schema.String),
   startedAt: DateTimeUtc,
   /** Set exactly when the run is no longer running. */
   finishedAt: Schema.optionalKey(DateTimeUtc),
@@ -200,6 +218,15 @@ export const upsertRunIndex = (
 
 export const INTERRUPTED_MESSAGE = "The window running this tidy-up was closed before it finished."
 
+/** Why an MCP or ACP run was interrupted: its agent, or Chrome's link to the companion, went away. */
+export const AGENT_GONE_MESSAGE = "The agent working on this tidy-up disconnected before it finished."
+
+/** The model id stored for runs whose agent doesn't say which model it uses (MCP, ACP). */
+export const UNKNOWN_MODEL = "unknown"
+
+/** A tool step cut short by the end of its run reads this. */
+export const STOPPED_STEP = "Stopped"
+
 /** Marks a run's result as reviewed (`at`), or as waiting for review again (`undefined`). */
 export const setReviewed = (run: Run, at: DateTime.Utc | undefined): Run => {
   if (at !== undefined) return { ...run, reviewedAt: at }
@@ -208,11 +235,28 @@ export const setReviewed = (run: Run, at: DateTime.Utc | undefined): Run => {
   return rest
 }
 
-/** A run whose page went away while it was running. Other runs are returned unchanged. */
+/** Tool steps still "running" when a run ends read "Stopped" (or `summary`). */
+const stopSteps = (steps: ReadonlyArray<RunStep>, summary: string = STOPPED_STEP): ReadonlyArray<RunStep> =>
+  steps.some((step) => step.kind === "tool" && step.status === "running")
+    ? steps.map((step) => (step.kind === "tool" && step.status === "running" ? { ...step, status: "error", summary } : step))
+    : steps
+
+/**
+ * A run whose page (API mode) or agent (MCP, ACP) went away while it was running. Other runs are
+ * returned unchanged.
+ */
 export const interruptRun = (run: Run, at: DateTime.Utc): Run =>
-  run.status !== "running"
-    ? run
-    : { ...run, status: "interrupted", finishedAt: at, error: { reason: "interrupted", message: INTERRUPTED_MESSAGE } }
+  run.status !== "running" ? run : {
+    ...run,
+    status: "interrupted",
+    finishedAt: at,
+    steps: stopSteps(run.steps),
+    error: { reason: "interrupted", message: run.mode === "api" ? INTERRUPTED_MESSAGE : AGENT_GONE_MESSAGE }
+  }
+
+/** A running run the user stopped. Other runs are returned unchanged. */
+export const cancelRun = (run: Run, at: DateTime.Utc): Run =>
+  run.status !== "running" ? run : { ...run, status: "cancelled", finishedAt: at, steps: stopSteps(run.steps) }
 
 /** List prices in US dollars per million tokens. Cache writes are the 5-minute TTL rate (1.25x input). */
 export interface ModelPrice {
