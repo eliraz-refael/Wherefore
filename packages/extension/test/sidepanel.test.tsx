@@ -4,12 +4,12 @@
  * browser, scripted model). See test/fakes/panel.tsx.
  */
 import { afterEach, describe, expect, it } from "@effect/vitest"
-import { INTERRUPTED_MESSAGE } from "@wherefore/core"
+import { INTERRUPTED_MESSAGE, Run } from "@wherefore/core"
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
-import { Effect } from "effect"
+import { Effect, Exit, Schema, Scope, Stream } from "effect"
 import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
-import { FakeNativeHost } from "./fakes/native.ts"
+import { brokerClient, FakeNativeHost } from "./fakes/native.ts"
 import { FakeRelayHub } from "./fakes/page.ts"
 import { envelope, ISO_NOW, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
 
@@ -593,5 +593,67 @@ describe("Tidy up, working", () => {
     fireEvent.click(second.ui.getByRole("button", { name: "Start again" }))
     expect(await second.ui.findByRole("heading", { level: 1, name: "Here’s what your tabs were for" })).toBeTruthy()
     expect(storedData(chrome, "runIndex").map((entry: any) => entry.status)).toEqual(["interrupted", "succeeded"])
+  })
+})
+
+describe("Tidy up, through an agent (MCP)", () => {
+  const mcpRun = (steps: ReadonlyArray<unknown>, extra: Record<string, unknown> = {}) =>
+    Schema.decodeUnknownSync(Run)({
+      id: "mcp-1",
+      mode: "mcp",
+      model: "unknown",
+      agent: "claude-code",
+      startedAt: ISO_NOW(),
+      status: "running",
+      tabs: RUN_TABS.map((tab, index) => snapshot(tab.id, tab.windowId, index, tab.title ?? "", tab.url)),
+      steps,
+      intentions: [],
+      usage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      ...extra
+    })
+
+  it("shows the agent's run by itself, even without an API key; answers and Stop go to the worker", async () => {
+    // No API key: the panel would show first run, but an agent's tidy-up still shows.
+    const app = make(new FakeChrome({ tabs: RUN_TABS }), new ScriptedModel([]), new FakeNativeHost("answer"))
+    await app.start()
+    const scope = Effect.runSync(Scope.make())
+    try {
+      await waitFor(() => expect((app.chrome.session.get("companion") as any)?._tag).toBe("Connected"))
+      const broker = await Effect.runPromise(brokerClient(app.harness.native.last!).pipe(Scope.provide(scope)))
+      const view = app.open()
+      expect(await view.ui.findByRole("button", { name: "Save key and continue" })).toBeTruthy()
+
+      const signals: Array<unknown> = []
+      Effect.runFork(broker("open_run", { id: "mcp-1" as never, mode: "mcp" }).pipe(
+        Stream.runForEach((signal) => Effect.sync(() => signals.push(signal))),
+        Effect.forkIn(scope)
+      ))
+      await waitFor(() => expect(signals).toEqual([{ _tag: "Opened" }]))
+      const ask = { kind: "question", at: ISO_NOW(), callId: "ask-1", questions: [question("q1", [1], "Is the auth PR yours?", ["Mine", "Someone else's"])] }
+      await Effect.runPromise(broker("update_run", { run: mcpRun([ask]) }))
+      const asking = Effect.runPromise(broker("ask_panel", {
+        runId: "mcp-1" as never,
+        askId: "ask-1",
+        questions: Schema.decodeUnknownSync(Run)(Schema.encodeSync(Run)(mcpRun([ask]))).steps.flatMap((step) =>
+          step.kind === "question" ? step.questions : []
+        )
+      }))
+
+      // The panel switches to the agent's run and shows its question.
+      expect(await view.ui.findByRole("heading", { level: 2, name: "Is the auth PR yours?" })).toBeTruthy()
+      fireEvent.click(view.ui.getByRole("button", { name: "Mine" }))
+      expect(await asking).toEqual({ answers: [{ id: "q1", answer: "Mine" }] })
+
+      await Effect.runPromise(broker("update_run", { run: mcpRun([{ ...ask, answers: [{ id: "q1", answer: "Mine" }] }]) }))
+      expect(await view.ui.findByText(/Claude Code is working through your tabs/)).toBeTruthy()
+      fireEvent.click(view.ui.getByRole("button", { name: "Stop" }))
+      expect(await view.ui.findByRole("heading", { level: 2, name: "You stopped this tidy-up" })).toBeTruthy()
+      expect(view.ui.queryByRole("button", { name: "Start again" })).toBeNull()
+      expect(view.ui.getByText("To try again, ask Claude Code to tidy up your tabs.")).toBeTruthy()
+      await waitFor(() => expect(signals).toHaveLength(2))
+      expect(storedData(app.chrome, "run:mcp-1").status).toBe("cancelled")
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void))
+    }
   })
 })
