@@ -37,7 +37,13 @@ const acpChrome = Effect.gen(function*() {
     listTabs: Effect.succeed({ tabs: twoTabs }),
     askPanel: ({ questions }) => Effect.succeed({ answers: questions.map((question) => ({ id: question.id, answer: "Yes" })) }),
     mcp: { node: process.execPath, cli: cliSource },
-    env: { ...process.env, WHEREFORE_HOME: home, FAKE_AGENT_LOG: logFile }
+    // NODE_OPTIONS: the agent's MCP server is src/cli.ts, which Node runs with type stripping.
+    env: {
+      ...process.env,
+      WHEREFORE_HOME: home,
+      FAKE_AGENT_LOG: logFile,
+      NODE_OPTIONS: "--experimental-strip-types --disable-warning=ExperimentalWarning"
+    }
   })
   yield* chrome.welcome
   yield* chrome.entry
