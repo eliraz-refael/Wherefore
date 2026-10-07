@@ -710,6 +710,13 @@ describe("Tidy up, with Claude Code (ACP)", () => {
       expect(await view.ui.findByText("Starting Claude Code…")).toBeTruthy()
       expect(view.ui.getByText(/Claude Code is working through your tabs/)).toBeTruthy()
       expect(storedData(app.chrome, "settings")).toEqual({ mode: "companion" })
+      // Back to the list stays there (the panel doesn't pull you back to a run it already showed).
+      fireEvent.click(view.ui.getByRole("button", { name: "Back to your list" }))
+      expect(await view.ui.findByText("Tidying up…")).toBeTruthy()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(view.ui.queryByText("Starting Claude Code…")).toBeNull()
+      fireEvent.click(view.ui.getByRole("button", { name: "Show" }))
+      expect(await view.ui.findByText("Starting Claude Code…")).toBeTruthy()
       await waitFor(() => expect(broker.requests).toHaveLength(1))
       const runId = broker.requests[0]!.runId
       expect(broker.requests[0]).toEqual({ runId, command: DEFAULT_AGENT_COMMAND, prefs: {} })

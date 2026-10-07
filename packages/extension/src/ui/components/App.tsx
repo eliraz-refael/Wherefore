@@ -81,6 +81,9 @@ function FollowCompanionRuns() {
   const screen = useAtomValue(screenAtom)
   const setScreen = useAtomSet(screenAtom)
   const shown = useRef(new Set<RunId>())
+  // A run this panel has shown (it started it, or the user opened it) isn't followed again: going
+  // back to the list stays there.
+  if (screen.name === "tidy") shown.current.add(screen.runId)
   const running = AsyncResult.isSuccess(runs)
     ? runs.value.runs.findLast((run) => run.status === "running" && run.mode !== "api")
     : undefined
