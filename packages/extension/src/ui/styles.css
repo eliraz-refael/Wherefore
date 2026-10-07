@@ -980,6 +980,63 @@ a.wf-tab:hover {
   padding-bottom: var(--wf-space-3);
 }
 
+/* How tidy-ups run (Claude Code or an API key): a radio pair in a card. */
+.wf-mode-choice {
+  margin: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.wf-mode-choice .wf-settings-row {
+  cursor: pointer;
+}
+
+.wf-mode-choice input[type="radio"],
+.wf-settings-card input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--wf-color-primary);
+}
+
+/* The agent's command line, folded away. */
+.wf-agent-command {
+  display: block;
+  padding-block: var(--wf-space-3);
+}
+
+.wf-agent-command summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--wf-color-fg-muted);
+}
+
+.wf-agent-command form {
+  display: flex;
+  gap: var(--wf-space-2);
+  margin-top: var(--wf-space-2);
+  padding-bottom: 0;
+}
+
+.wf-settings-row.wf-sub {
+  min-height: 0;
+  padding-block: var(--wf-space-3);
+}
+
+/* Read by screen readers, not shown. */
+.wf-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .wf-dot {
   flex: none;
   width: 8px;

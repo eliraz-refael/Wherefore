@@ -1,5 +1,5 @@
 /**
- * Tidy up: one screen for a run, whichever page runs it. While it runs: a plain-language status
+ * Tidy up: one screen for a run, whichever page (or, for ACP and MCP runs, agent) runs it. While it runs: a plain-language status
  * and its questions, one at a time, answered with a tap (canvas v6 "Tidying"). When it succeeds:
  * the results (Review.tsx). When it stops: why, and a way to start again.
  *
@@ -173,9 +173,15 @@ const STOPPED_TITLE: Record<Exclude<Run["status"], "running" | "succeeded">, str
   interrupted: "This tidy-up was interrupted"
 }
 
+/** Failures the user fixes in Settings (the agent's command, the companion, the key). */
+const FIXED_IN_SETTINGS: ReadonlySet<string> = new Set(["agent_not_found", "companion", "missing_key", "invalid_key"])
+
 function Stopped({ run, onBack }: { readonly run: Run; readonly onBack: () => void }) {
   const { busy, start } = useStartTidy()
+  const setScreen = useAtomSet(screenAtom)
   const status = run.status === "running" || run.status === "succeeded" ? "failed" : run.status
+  // A run the panel started (API or ACP) can start again from here; an MCP client's can't.
+  const fromPanel = run.mode !== "mcp"
   return (
     <div className="wf-screen">
       <SubHeader title="Tidy up" onBack={onBack} />
@@ -183,12 +189,19 @@ function Stopped({ run, onBack }: { readonly run: Run; readonly onBack: () => vo
         <section className="wf-card wf-stopped" aria-labelledby="wf-stopped-title">
           <h2 id="wf-stopped-title" className="wf-stopped-title">{STOPPED_TITLE[status]}</h2>
           <p>{run.error?.message ?? "Nothing was saved or closed."}</p>
-          {run.mode === "api" ? null : <p className="wf-sub">To try again, ask {agentName(run.agent)} to tidy up your tabs.</p>}
+          {fromPanel ? null : <p className="wf-sub">To try again, ask {agentName(run.agent)} to tidy up your tabs.</p>}
           <div className="wf-item-actions">
-            {run.mode === "api"
+            {fromPanel
               ? (
                 <button type="button" className="wf-primary wf-primary-small" onClick={start} disabled={busy}>
                   Start again
+                </button>
+              )
+              : null}
+            {run.error !== undefined && FIXED_IN_SETTINGS.has(run.error.reason)
+              ? (
+                <button type="button" className="wf-button wf-button-small" onClick={() => setScreen({ name: "settings" })}>
+                  Settings
                 </button>
               )
               : null}
