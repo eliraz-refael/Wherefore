@@ -240,6 +240,81 @@ describe("Your list", () => {
     expect(view.ui.queryByRole("button", { name: /^Remove / })).toBeNull()
   })
 
+  // The panel can be behind the worker: these change storage without telling it (no onChanged).
+  const deskTabs = {
+    A: { title: "Desk A", url: "https://shop.example/desk-a" },
+    B: { title: "Desk B", url: "https://shop.example/desk-b" },
+    C: { title: "Desk C", url: "https://shop.example/desk-c" }
+  }
+  const desksChrome = (tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>) =>
+    new FakeChrome({
+      local: {
+        settings: SETTINGS,
+        items: envelope([
+          storedItem({ id: "a", task: "Compare desks", tabs }),
+          storedItem({ id: "b", task: "Pick a chair", tabs: [{ title: "Chair", url: "https://shop.example/chair" }] })
+        ])
+      }
+    })
+  const changeBehindThePanel = (chrome: FakeChrome, tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>) => {
+    const [item, ...rest] = storedData(chrome, "items")
+    chrome.local.set("items", envelope([{ ...item, tabs: storedItem({ id: "a", task: "x", tabs }).tabs }, ...rest]))
+  }
+
+  it("× follows the worker: when it took the item's last tab, focus moves on as if the item left", async () => {
+    const chrome = desksChrome([deskTabs.A, deskTabs.B])
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    // The panel still shows two tabs; the worker has one.
+    changeBehindThePanel(chrome, [deskTabs.A])
+    const remove = view.ui.getByRole("button", { name: "Remove Desk A" })
+    remove.focus()
+    fireEvent.click(remove)
+    expect(await view.ui.findByText("Removed “Compare desks” with its last tab.")).toBeTruthy()
+    expect(storedData(chrome, "items").map((item: any) => item.id)).toEqual(["b"])
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-item-toggle")).toBe("b"))
+  })
+
+  it("× that fails keeps focus on that ×", async () => {
+    const chrome = desksChrome([deskTabs.A, deskTabs.B, deskTabs.C])
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    // Desk B is already gone in storage, so the worker answers TabNotFound.
+    changeBehindThePanel(chrome, [deskTabs.A, deskTabs.C])
+    const remove = view.ui.getByRole("button", { name: "Remove Desk B" })
+    remove.focus()
+    fireEvent.click(remove)
+    // Chrome drops focus from a button while it is disabled (busy). happy-dom keeps it there (and
+    // ignores blur() on a disabled button), so move it away to stand in for that.
+    view.ui.getByRole("button", { name: "Settings" }).focus()
+    expect(document.activeElement).not.toBe(remove)
+    expect(await view.ui.findByText("That tab isn't in this item any more.")).toBeTruthy()
+    await waitFor(() => expect(document.activeElement).toBe(remove))
+    expect((remove as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it("× on a stale list still moves focus to a × that exists", async () => {
+    const chrome = desksChrome([deskTabs.A, deskTabs.B])
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    // The worker's order differs, so it finds Desk A by URL at another index than the panel's.
+    changeBehindThePanel(chrome, [deskTabs.B, deskTabs.A])
+    const remove = view.ui.getByRole("button", { name: "Remove Desk A" })
+    remove.focus()
+    fireEvent.click(remove)
+    expect(await view.ui.findByText("Removed “Desk A” from “Compare desks”.")).toBeTruthy()
+    await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove Desk B"))
+  })
+
   it("edits a task in place and keeps focus on the item", async () => {
     const chrome = listChrome()
     const app = make(chrome)
