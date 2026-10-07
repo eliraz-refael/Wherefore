@@ -66,8 +66,9 @@ export const useAct = () => {
 }
 
 /**
- * Focuses the first element matching `selector` once it is rendered (React commits after this
- * returns, and an element may move or appear a frame later). Gives up after a few tries.
+ * Focuses the first element matching `selector` once it is rendered and enabled (React commits
+ * after this returns, and an element may move, appear or stop being disabled a frame later). Gives
+ * up after a few tries.
  */
 export const focusSoon = (selector: string): void => focusWhenThere(() => document.querySelector<HTMLElement>(selector))
 
@@ -78,7 +79,7 @@ const focusWhenThere = (find: () => HTMLElement | null): void => {
   let tries = 0
   const attempt = () => {
     const element = find()
-    if (element !== null) element.focus()
+    if (element !== null && !element.matches(":disabled")) element.focus()
     else if (tries++ < 10) setTimeout(attempt, 16)
   }
   setTimeout(attempt, 0)
