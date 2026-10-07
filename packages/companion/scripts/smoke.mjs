@@ -2,7 +2,10 @@
 // `native-host` over pipes with Chrome's framing, answers the broker's calls as the extension's
 // worker would, calls the broker over its socket (raw ndjson RPC, with and without its access
 // token), then runs `mcp` and drives a whole tidy-up through it like an MCP client would (raw
-// JSON-RPC over stdio). Runs against a temporary WHEREFORE_HOME, so nothing real is touched.
+// JSON-RPC over stdio). Then ACP mode: the "worker" asks the broker to start an agent (the fake
+// ACP agent in test/fakeAgent.ts, never the real one), which runs a tidy-up through
+// `dist/cli.js mcp --profile … --run …`; and a Stop that must end the agent's whole process tree.
+// Runs against a temporary WHEREFORE_HOME, so nothing real is touched.
 //
 //   pnpm -C packages/companion build && pnpm -C packages/companion smoke
 import { spawn, spawnSync } from "node:child_process"
@@ -13,11 +16,14 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js")
+const fakeAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "test", "fakeAgent.ts")
+const PROTOCOL = 2
 const ORIGIN = "chrome-extension://anpbbaiepneaddgoldgmapilgiflochg/"
 const PROFILE = "smokesmokesmokesmokesmokes"
 // A short directory: Unix socket paths are limited to about 100 bytes, and macOS's tmpdir is long.
 const home = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "wf-smoke-"))
-const env = { ...process.env, WHEREFORE_HOME: home }
+const agentLog = join(home, "agent.log")
+const env = { ...process.env, WHEREFORE_HOME: home, FAKE_AGENT_LOG: agentLog }
 let failures = 0
 let stderr = ""
 
@@ -58,7 +64,7 @@ const until = async (condition, label, ms = 10_000) => {
 const timer = setTimeout(() => {
   console.log("FAIL timeout")
   process.exit(1)
-}, 60_000)
+}, 120_000)
 
 try {
   // 1. Someone else's origin is refused, and nothing reaches stdout.
@@ -71,8 +77,20 @@ try {
   const fromHost = []
   const reply = (requestId, exit) => host.stdin.write(frame({ _tag: "FromWorker", rpc: { _tag: "Exit", requestId, exit } }))
   const runs = new Map()
+  // The broker's answers to the worker's own calls (ACP mode), by request id.
+  const fromBroker = new Map()
   readFrames(host.stdout, (message) => {
     fromHost.push(message)
+    if (message._tag === "FromBroker") {
+      const rpc = message.rpc
+      const id = rpc.requestId
+      if (!fromBroker.has(id)) fromBroker.set(id, { events: [], exit: undefined })
+      if (rpc._tag === "Chunk") {
+        fromBroker.get(id).events.push(...rpc.values)
+        host.stdin.write(frame({ _tag: "ToBroker", rpc: { _tag: "Ack", requestId: id } }))
+      } else if (rpc._tag === "Exit") fromBroker.get(id).exit = rpc.exit
+      return
+    }
     if (message._tag !== "ToWorker") return
     const rpc = message.rpc
     // The fake worker: list tabs, store runs, keep leases open; leave read_pages hanging.
@@ -97,7 +115,7 @@ try {
   })
   const exited = new Promise((resolve) => host.on("exit", (code) => resolve(code)))
 
-  host.stdin.write(frame({ _tag: "Hello", protocol: 1, profileId: PROFILE, extensionVersion: "1.2.3" }))
+  host.stdin.write(frame({ _tag: "Hello", protocol: PROTOCOL, profileId: PROFILE, extensionVersion: "1.2.3" }))
   await until(() => fromHost.some((message) => message._tag === "Welcome"), "Welcome")
   check(true, `Welcome: ${JSON.stringify(fromHost.find((message) => message._tag === "Welcome"))}`)
 
@@ -186,6 +204,54 @@ try {
   const mcpCode = await mcpExited
   check(mcpCode === 0, `mcp: exits ${mcpCode} when the client closes stdin`)
 
+  // 5b. ACP mode: the worker asks the broker to start an agent for a run it created.
+  const agentCommand = (scenario) =>
+    `"${process.execPath}" --experimental-strip-types --disable-warning=ExperimentalWarning "${fakeAgent}" ${scenario}`
+  const logged = () =>
+    existsSync(agentLog) ? readFileSync(agentLog, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line)) : []
+  const startAgent = (requestId, runId, scenario) =>
+    host.stdin.write(frame({
+      _tag: "ToBroker",
+      rpc: { _tag: "Request", id: requestId, tag: "start_agent", payload: { runId, command: agentCommand(scenario), prefs: { model: "opus" } }, headers: [] }
+    }))
+  startAgent("a1", "acp-run-1", "forbidden")
+  await until(() => fromBroker.get("a1")?.exit !== undefined, "the ACP run to end", 30_000)
+  const acp = fromBroker.get("a1")
+  check(acp.exit._tag === "Success", `acp: the agent's run ended normally (${JSON.stringify(acp.exit).slice(0, 200)})`)
+  check(
+    acp.events.map((event) => event._tag).join(",") === "Started,Settings,Working,Usage,Usage,Finished",
+    `acp: events ${acp.events.map((event) => event._tag).join(",")}`
+  )
+  const offered = acp.events.find((event) => event._tag === "Settings")?.settings ?? []
+  check(offered.map((setting) => `${setting.id}=${setting.value}`).join(",") === "model=opus,effort=medium", "acp: preferences applied as offered, no permission modes")
+  const acpRun = runs.get("acp-run-1")
+  check(acpRun?.mode === "acp" && acpRun.status === "succeeded" && acpRun.intentions.length === 2, "acp: the MCP session stored its result in the panel's run")
+  const session = logged().find((entry) => entry.event === "session")
+  check(
+    session?.mcpServers?.[0]?.args?.join(" ") === `${cli} mcp --profile ${PROFILE} --run acp-run-1`,
+    `acp: the agent got wherefore mcp --profile --run (${session?.mcpServers?.[0]?.args?.join(" ")})`
+  )
+  const permissions = logged().filter((entry) => entry.event === "permission").map((entry) => `${entry.tool}:${entry.outcome.optionId}`)
+  check(permissions.join(",") === "rm -rf ~:reject,mcp__wherefore__list_tabs:allow", `acp: the guard refused the shell and allowed Wherefore (${permissions.join(",")})`)
+
+  // Stop: the worker interrupts the call; the agent's turn is cancelled and its process tree ends.
+  startAgent("a2", "acp-run-2", "hang")
+  await until(() => logged().some((entry) => entry.event === "child") && logged().filter((entry) => entry.event === "listed").length === 2, "the hanging agent", 30_000)
+  const agentPid = logged().filter((entry) => entry.event === "started").at(-1).pid
+  const childPid = logged().find((entry) => entry.event === "child").childPid
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  check(alive(agentPid) && alive(childPid), "acp: the agent and its child are running")
+  host.stdin.write(frame({ _tag: "ToBroker", rpc: { _tag: "Interrupt", requestId: "a2" } }))
+  await until(() => !alive(agentPid) && !alive(childPid), "the agent's process tree to end", 15_000)
+  check(logged().some((entry) => entry.event === "cancel"), "acp: Stop cancelled the turn, then ended the whole process tree")
+
   // 6. A call in flight when Chrome closes the port fails with ExtensionUnavailable, then the host cleans up.
   request("2", "read_pages", { tab_ids: [7] })
   await until(() => fromHost.some((message) => message.rpc?.tag === "read_pages"), "read_pages to reach the worker")
@@ -205,7 +271,7 @@ try {
     const second = spawn(process.execPath, [cli, "native-host", ORIGIN], { env, stdio: ["pipe", "pipe", "pipe"] })
     second.stderr.on("data", (chunk) => (stderr += chunk))
     const secondExit = new Promise((resolve) => second.on("exit", (code, signal) => resolve(code ?? signal)))
-    second.stdin.write(frame({ _tag: "Hello", protocol: 1, profileId: PROFILE, extensionVersion: "1.2.3" }))
+    second.stdin.write(frame({ _tag: "Hello", protocol: PROTOCOL, profileId: PROFILE, extensionVersion: "1.2.3" }))
     await until(() => existsSync(entryFile), "the second registry entry")
     const socket = JSON.parse(readFileSync(entryFile, "utf8")).socket
     second.kill("SIGTERM")
