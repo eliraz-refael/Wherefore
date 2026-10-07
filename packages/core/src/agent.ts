@@ -187,8 +187,9 @@ export const agentNotLoggedInMessage = (command: string): string =>
 export const agentExitedMessage = (command: string, code: number | null): string =>
   `${agentLabel(command)} stopped unexpectedly${code === null ? "" : ` (exit code ${code})`}. Try again. If it keeps happening, run "${command.trim()}" in a terminal to see why.`
 
-export const agentFailedMessage = (command: string, detail: string): string =>
-  `${agentLabel(command)} couldn't start the tidy-up: ${detail}`
+/** The agent couldn't start (or, once working, couldn't finish) the tidy-up, and why. */
+export const agentFailedMessage = (command: string, detail: string, working = false): string =>
+  `${agentLabel(command)} couldn't ${working ? "finish" : "start"} the tidy-up: ${detail}`
 
 /** Why a run ended without a result, from the agent's stop reason. */
 export const noSubmissionMessage = (command: string, stopReason: string): string => {

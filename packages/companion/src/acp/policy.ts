@@ -166,7 +166,7 @@ export const classifyFailure = (facts: FailureFacts): AgentRunError => {
   }
   if (exit !== undefined) return new AgentExited({ code: exit.code, message: agentExitedMessage(command, exit.code) })
   const detail = request === undefined ? "it stopped answering." : shorten(request.message)
-  return new AgentFailed({ message: agentFailedMessage(command, detail.endsWith(".") ? detail : `${detail}.`) })
+  return new AgentFailed({ message: agentFailedMessage(command, detail.endsWith(".") ? detail : `${detail}.`, phase === "working") })
 }
 
 const shorten = (text: string) => (text.length > 200 ? `${text.slice(0, 199)}…` : text)

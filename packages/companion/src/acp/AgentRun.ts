@@ -73,7 +73,9 @@ const zeroUsage: AgentUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens
 /** Runs the agent for one tidy-up; see the module comment. */
 export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, AgentRunError, AgentProcesses> =>
   Stream.callback<AgentEvent, AgentRunError, AgentProcesses>((queue) =>
-    Effect.gen(function*() {
+    // Its own scope, closed when this fiber ends: when the stream is interrupted, the turn is
+    // cancelled (the prompt's interruption) before the process tree is ended (this scope).
+    Effect.scoped(Effect.gen(function*() {
       const { command } = options
       const processes = yield* AgentProcesses
       const cwd = agentDir(options.location)
@@ -197,11 +199,15 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
       emit({ _tag: "Finished", stopReason: response.stopReason })
       yield* Effect.logInfo(`acp: the agent ended its turn for run ${options.runId} (${response.stopReason})`)
       yield* Queue.end(queue)
-    }).pipe(
-      Effect.onExit((exit) =>
-        exit._tag === "Failure" && !Cause.hasInterruptsOnly(exit.cause)
-          ? Effect.logWarning(`acp: run ${options.runId} failed: ${Cause.findErrorOption(exit.cause)._tag === "Some" ? "agent error" : "defect"}`)
-          : Effect.void
+    })).pipe(
+      // A failure of this effect doesn't end the stream by itself: it goes into the queue.
+      Effect.catchCause((cause) =>
+        Effect.andThen(
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning(`acp: run ${options.runId} ${Cause.hasFails(cause) ? "failed" : "crashed"}`),
+          Queue.failCause(queue, cause)
+        )
       )
     )
   )
