@@ -60,6 +60,8 @@ describe("WorkerRpcs", () => {
       "mark_open",
       "remove_item",
       "restore_item",
+      "remove_tab",
+      "restore_tab",
       "update_settings",
       "reset_store_key",
       "save_run",
