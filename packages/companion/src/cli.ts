@@ -108,7 +108,7 @@ const status = Command.make("status", {}, () =>
     if (removed.length > 0) yield* Console.log(`  (cleaned up ${removed.length} stale entr${removed.length === 1 ? "y" : "ies"})`)
     if (live.length === 0) yield* Console.log("  none. Open Chrome with the Wherefore extension loaded.")
     for (const entry of live) {
-      const info = yield* Effect.scoped(Effect.flatMap(connectBroker(entry.socket), (client) => client.call("broker_info", undefined))).pipe(
+      const info = yield* Effect.scoped(Effect.flatMap(connectBroker(entry.socket, entry.token), (client) => client.call("broker_info", undefined))).pipe(
         Effect.timeoutOption(Duration.seconds(2)),
         Effect.option
       )

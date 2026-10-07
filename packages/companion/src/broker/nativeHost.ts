@@ -8,8 +8,9 @@
  *    answers `Welcome` (its version). A different protocol version gets a `Welcome` (so the
  *    extension can say which side to update) and the host exits.
  * 3. **Broker.** A local socket, user-only (registry.ts), named for the profile (paths.ts), speaks
- *    `effect/unstable/rpc` (`BrokerRpcs`, core broker.ts). Tool calls are forwarded to the
- *    service worker over the native port (`WorkerLink`). Then the broker is registered.
+ *    `effect/unstable/rpc` (`BrokerRpcs`, core broker.ts). Tool calls and companion-run calls are
+ *    forwarded to the service worker over the native port (`WorkerLink`). Then the broker is
+ *    registered, with a random access token every request must carry (`BROKER_TOKEN_HEADER`).
  * 4. **Shutdown.** When Chrome closes the port (stdin ends) or a signal arrives (the CLI
  *    interrupts this effect): calls in flight fail with `ExtensionUnavailable` and get a moment
  *    to reach their clients, then the registry entry and the socket are removed.
@@ -18,14 +19,18 @@
  * stderr, and never include tool payloads (page text) or results.
  */
 import {
+  BROKER_TOKEN_HEADER,
   BrokerRpcs,
+  BrokerUnauthorized,
   EXTENSION_ORIGIN,
   ExtensionToHost,
   NATIVE_PROTOCOL_VERSION,
   type NativeHello,
   type ProfileId,
-  type RpcFromServer
+  type RpcFromServer,
+  ToolError
 } from "@wherefore/core"
+import { randomBytes, timingSafeEqual } from "node:crypto"
 import * as Fs from "node:fs/promises"
 import { Deferred, Duration, Effect, Layer, Queue, Schema, type Stdio, Stream } from "effect"
 import { makeNativePort } from "../native/NativePort.ts"
@@ -64,19 +69,55 @@ const decodeFrame = Schema.decodeUnknownExit(ExtensionToHost)
 
 const messageOf = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause))
 
+/** A new broker access token: 32 random bytes, base64url. */
+export const makeToken = (): string => randomBytes(32).toString("base64url")
+
+const UNAUTHORIZED = "This broker needs its access token (from its registry entry) on every request."
+
+/** Whether a request's headers carry `token`, compared in constant time. */
+export const carriesToken = (headers: Readonly<Record<string, string | undefined>>, token: string): boolean => {
+  const given = Buffer.from(headers[BROKER_TOKEN_HEADER] ?? "", "utf8")
+  const expected = Buffer.from(token, "utf8")
+  return given.length === expected.length && timingSafeEqual(given, expected)
+}
+
+/** A request over Chrome's size limit, told to the model as a tool error. */
+const tooLargeForTool = <A, E>(effect: Effect.Effect<A, E | { readonly _tag: "MessageTooLarge"; readonly bytes: number; readonly limit: number }>) =>
+  Effect.catchIf(
+    effect,
+    (error): error is { readonly _tag: "MessageTooLarge"; readonly bytes: number; readonly limit: number } =>
+      typeof error === "object" && error !== null && (error as { _tag?: unknown })._tag === "MessageTooLarge",
+    (error) => Effect.fail(new ToolError({ message: `The request is ${error.bytes} bytes; Chrome accepts at most ${error.limit}.` }))
+  ) as Effect.Effect<A, Exclude<E, { readonly _tag: "MessageTooLarge" }> | ToolError>
+
 /** The broker's socket server: `BrokerRpcs` over ndjson, on a Unix socket or named pipe. */
-const serveBroker = (socket: string, info: Omit<RegistryEntry, "socket">, link: WorkerLink, track: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>) =>
-  RpcServer.layer(BrokerRpcs, { disableTracing: true, disableFatalDefects: true }).pipe(
+const serveBroker = (
+  socket: string,
+  info: Omit<RegistryEntry, "socket" | "token">,
+  token: string,
+  link: WorkerLink,
+  track: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>
+) => {
+  const guard = <A, E>(headers: Readonly<Record<string, string | undefined>>, effect: Effect.Effect<A, E>) =>
+    carriesToken(headers, token) ? effect : Effect.fail(new BrokerUnauthorized({ message: UNAUTHORIZED }))
+  return RpcServer.layer(BrokerRpcs, { disableTracing: true, disableFatalDefects: true }).pipe(
     Layer.provide(BrokerRpcs.toLayer(BrokerRpcs.of({
-      broker_info: () => Effect.succeed(info),
-      list_tabs: (payload) => track(link.call("list_tabs", payload)),
-      read_pages: (payload) => track(link.call("read_pages", payload)),
-      wake_and_read_pages: (payload) => track(link.call("wake_and_read_pages", payload))
+      broker_info: (_, { headers }) => guard(headers, Effect.succeed(info)),
+      list_tabs: (payload, { headers }) => guard(headers, track(tooLargeForTool(link.call("list_tabs", payload)))),
+      read_pages: (payload, { headers }) => guard(headers, track(tooLargeForTool(link.call("read_pages", payload)))),
+      wake_and_read_pages: (payload, { headers }) =>
+        guard(headers, track(tooLargeForTool(link.call("wake_and_read_pages", payload)))),
+      // A lease lasts as long as its run, so shutdown doesn't wait for it (it fails at once anyway).
+      open_run: (payload, { headers }) =>
+        carriesToken(headers, token) ? link.openRun(payload) : Stream.fail(new BrokerUnauthorized({ message: UNAUTHORIZED })),
+      update_run: (payload, { headers }) => guard(headers, track(link.call("update_run", payload))),
+      ask_panel: (payload, { headers }) => guard(headers, link.call("ask_panel", payload))
     }))),
     Layer.provide(RpcServer.layerProtocolSocketServer),
     Layer.provide(RpcSerialization.layerNdjson),
     Layer.provide(NodeSocketServer.layer({ path: socket }))
   )
+}
 
 export const runNativeHost = (options: NativeHostOptions): Effect.Effect<void, CallerRejected | BrokerStartFailed, Stdio.Stdio> =>
   Effect.scoped(Effect.gen(function*() {
@@ -153,11 +194,12 @@ export const runNativeHost = (options: NativeHostOptions): Effect.Effect<void, C
       pid: options.pid,
       startedAt: Date.now()
     }
-    yield* Layer.build(serveBroker(socket, info, link, track)).pipe(
+    const token = makeToken()
+    yield* Layer.build(serveBroker(socket, info, token, link, track)).pipe(
       Effect.mapError((error) => new BrokerStartFailed({ message: `cannot listen on ${socket}: ${messageOf(error.reason.cause)}` }))
     )
     if (unix) yield* Effect.promise(() => Fs.chmod(socket, 0o600).catch(() => undefined))
-    const entry: RegistryEntry = { ...info, socket }
+    const entry: RegistryEntry = { ...info, socket, token }
     yield* Effect.acquireRelease(
       registry.register(entry).pipe(Effect.mapError((error) => new BrokerStartFailed({ message: error.message }))),
       () => registry.unregister(entry)
