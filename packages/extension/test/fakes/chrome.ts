@@ -73,6 +73,10 @@ export class FakeChrome {
   readonly session = new Map<string, unknown>()
   /** Every call, e.g. "scripting.executeScript 3", for asserting what was (not) touched. */
   readonly calls: Array<string> = []
+  /** Open side panels and extension pages in tabs (`runtime.getContexts`). */
+  openViews = 1
+  /** How often `openViews` was asked. */
+  viewChecks = 0
   reloadCompletes: boolean
   private readonly maxRecentlyClosed: number
   private readonly refuseUrls: ReadonlySet<string>
@@ -301,6 +305,12 @@ export class FakeChrome {
             ? this.fail("sessions.restore", `Invalid session id: "${sessionId}".`)
             : Effect.succeed(restored)
         })
+    },
+    runtime: {
+      openViews: Effect.sync(() => {
+        this.viewChecks++
+        return this.openViews
+      })
     },
     storage: {
       local: this.area("local"),

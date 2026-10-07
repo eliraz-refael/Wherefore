@@ -18,7 +18,7 @@ describe("RunLocks (Web Locks)", () => {
 
       const scope = yield* Scope.make()
       yield* page1.hold(a).pipe(Scope.provide(scope))
-      expect(manager.heldNames()).toEqual(["wherefore/api-run", runLockName(a)])
+      expect(manager.heldNames()).toEqual(["wherefore/active-run", runLockName(a)])
       expect(yield* worker.isLive(a)).toBe(true)
       expect(yield* worker.isLive(b)).toBe(false)
 

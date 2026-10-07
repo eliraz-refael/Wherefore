@@ -17,6 +17,7 @@
  */
 import {
   type BrowserError,
+  cancelRun,
   interruptRun,
   ItemNotFound,
   markDone,
@@ -87,6 +88,11 @@ export class Store extends Context.Service<Store, {
    * stored is ignored.
    */
   readonly setRunReviewed: (id: RunId, reviewed: boolean) => Effect.Effect<void, StoreError>
+  /**
+   * Marks a stored run cancelled (the user stopped it) if it is still running. Returns the run as
+   * stored now; `undefined` when no run has this id.
+   */
+  readonly cancelRun: (id: RunId) => Effect.Effect<Run | undefined, StoreError>
   /**
    * The way out of `StoreUnreadable` for a fixed key: makes sure the unreadable value is backed up,
    * then removes the key, so it reads as empty. Returns the backup key; `null` (and no change) when
@@ -249,6 +255,22 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
       if (next !== run) yield* local.set({ [key.name]: encodeStored(key, next) })
     }).pipe(Semaphore.withPermit(lock))
 
+  const cancelStoredRun = (id: RunId) =>
+    Effect.gen(function*() {
+      const key = runKey(id)
+      const index = yield* readUnlocked(runIndexKey)
+      const run = yield* readUnlocked(key)
+      if (run === undefined) return undefined
+      const next = cancelRun(run, yield* DateTime.now)
+      if (next === run) return run
+      const nextIndex = upsertRunIndex(index, { id, status: next.status }).index
+      yield* local.set({
+        [key.name]: encodeStored(key, next),
+        ...(nextIndex === index ? {} : { [runIndexKey.name]: encodeStored(runIndexKey, nextIndex) })
+      })
+      return next
+    }).pipe(Semaphore.withPermit(lock))
+
   const resetKey = (name: ResettableKey) =>
     Effect.gen(function*() {
       const key = storeKeys.find((candidate) => candidate.name === name)
@@ -279,6 +301,7 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
     migrateAll,
     profileId,
     setRunReviewed,
+    cancelRun: cancelStoredRun,
     resetKey,
     saveItems: (incoming) =>
       update(itemsKey, (items) => {

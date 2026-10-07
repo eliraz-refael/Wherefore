@@ -13,7 +13,7 @@ import { useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
 import { answerAsk, showTab, stopRun } from "../actions.ts"
 import { runsAtom, screenAtom } from "../atoms.ts"
-import { displayDomain } from "../format.ts"
+import { agentName, displayDomain } from "../format.ts"
 import { focusIdSoon, useAct, useToast } from "../hooks.ts"
 import { progressText } from "../progress.ts"
 import { pendingAsk } from "../Tidy.ts"
@@ -78,7 +78,8 @@ function Working({ run, onBack }: { readonly run: Run; readonly onBack: () => vo
         {Option.match(ask, {
           onNone: () => (
             <p className="wf-card wf-note">
-              This takes a minute or two. You can keep browsing; your tabs stay where they are until you save.
+              {run.mode === "api" ? "This takes a minute or two." : `${agentName(run.agent)} is working through your tabs.`}{" "}
+              You can keep browsing; your tabs stay where they are until you save.
             </p>
           ),
           onSome: (step) => <QuestionCard key={step.callId} run={run} step={step} />
@@ -182,10 +183,15 @@ function Stopped({ run, onBack }: { readonly run: Run; readonly onBack: () => vo
         <section className="wf-card wf-stopped" aria-labelledby="wf-stopped-title">
           <h2 id="wf-stopped-title" className="wf-stopped-title">{STOPPED_TITLE[status]}</h2>
           <p>{run.error?.message ?? "Nothing was saved or closed."}</p>
+          {run.mode === "api" ? null : <p className="wf-sub">To try again, ask {agentName(run.agent)} to tidy up your tabs.</p>}
           <div className="wf-item-actions">
-            <button type="button" className="wf-primary wf-primary-small" onClick={start} disabled={busy}>
-              Start again
-            </button>
+            {run.mode === "api"
+              ? (
+                <button type="button" className="wf-primary wf-primary-small" onClick={start} disabled={busy}>
+                  Start again
+                </button>
+              )
+              : null}
             <button type="button" className="wf-text-button" onClick={onBack}>Back to your list</button>
           </div>
         </section>

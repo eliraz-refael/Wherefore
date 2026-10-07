@@ -72,6 +72,14 @@ export class ChromeApi extends Context.Service<ChromeApi, {
     /** Survives a worker restart, not a browser restart. Only extension pages and the worker can read it. */
     readonly session: StorageArea
   }
+  readonly runtime: {
+    /**
+     * How many of the extension's views are open in this profile: side panels, and extension
+     * pages in tabs (`runtime.getContexts`, Chrome 116+). The worker asks before showing a
+     * companion run's questions.
+     */
+    readonly openViews: Effect.Effect<number, BrowserError>
+  }
 }>()("@wherefore/extension/ChromeApi") {
   /** The real `chrome.*`, via WXT's `browser`. */
   static readonly layer: Layer.Layer<ChromeApi> = Layer.sync(ChromeApi)(() => makeLive())
@@ -145,5 +153,11 @@ const makeLive = (): ChromeApi["Service"] => ({
   storage: {
     local: storageArea("local"),
     session: storageArea("session")
+  },
+  runtime: {
+    openViews: Effect.map(
+      call("runtime.getContexts", () => browser.runtime.getContexts({ contextTypes: ["SIDE_PANEL", "TAB"] })),
+      (contexts) => contexts.length
+    )
   }
 })

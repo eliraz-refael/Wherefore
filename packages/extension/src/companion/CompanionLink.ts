@@ -5,8 +5,10 @@
  *
  * On the port (core companion.ts): the worker says `Hello` with this profile's stable id (made
  * once, stored in `chrome.storage.local`), the host answers `Welcome`, and from then on the
- * worker serves `TabToolRpcs` to the host, over the same `TabTools` pages use. The host's broker
- * forwards calls from MCP and ACP agents.
+ * worker serves `CompanionWorkerRpcs` to the host: the tab tools, over the same `TabTools` pages
+ * use, and the companion-run RPCs (`CompanionRuns`). The host's broker forwards calls from MCP and
+ * ACP agents. When the port goes away, every call in flight on it is interrupted, which ends the
+ * leases of the companion's runs (they are marked interrupted).
  *
  * **Reconnect policy.**
  * - Host not found: status `NotInstalled`, and no retries. The worker tries again at its next
@@ -21,6 +23,7 @@
  * The status is kept in `chrome.storage.session` (`companionStatusKey`), so every view can show it.
  */
 import {
+  CompanionWorkerRpcs,
   type CompanionStatus,
   CompanionStatus as CompanionStatusSchema,
   HostToExtension,
@@ -28,8 +31,7 @@ import {
   type NativeWelcome,
   type ProfileId,
   profileIdFromBytes,
-  type RpcFromClient,
-  TabToolRpcs
+  type RpcFromClient
 } from "@wherefore/core"
 import { Clock, Context, Deferred, Duration, Effect, Layer, Queue, Schema, Stream, SubscriptionRef } from "effect"
 import { Store } from "../background/Store.ts"
@@ -38,6 +40,7 @@ import { tabToolHandlers } from "../background/toolHandlers.ts"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
 import { companionStatusKey } from "../store/keys.ts"
 import { type RpcMessage, RpcSerialization, RpcServer } from "../unstable.ts"
+import { CompanionRuns } from "./CompanionRuns.ts"
 import { NativeConnector, type NativePort } from "./NativeConnector.ts"
 
 /** Chrome's `runtime.lastError` messages for a native port. */
@@ -64,7 +67,7 @@ export class CompanionLink extends Context.Service<CompanionLink, {
   readonly check: Effect.Effect<CompanionStatus>
 }>()("@wherefore/extension/CompanionLink") {
   /** Starts the link with the worker and stops it (closing the port) with the worker. */
-  static readonly layer: Layer.Layer<CompanionLink, never, NativeConnector | ChromeApi | Store | TabTools> = Layer.effect(
+  static readonly layer: Layer.Layer<CompanionLink, never, NativeConnector | ChromeApi | Store | TabTools | CompanionRuns> = Layer.effect(
     CompanionLink
   )(Effect.gen(function*() {
     return yield* make
@@ -91,7 +94,13 @@ const make = Effect.gen(function*() {
   const chrome = yield* ChromeApi
   const store = yield* Store
   const tools = yield* TabTools
-  const toolHandlers = TabToolRpcs.toLayer(tabToolHandlers(tools))
+  const runs = yield* CompanionRuns
+  const handlers = CompanionWorkerRpcs.toLayer(CompanionWorkerRpcs.of({
+    ...tabToolHandlers(tools),
+    open_run: ({ id, mode }) => runs.open(id, mode),
+    update_run: ({ run }) => runs.update(run),
+    ask_panel: ({ runId, askId, questions }) => runs.ask(runId, askId, questions)
+  }))
   const statusRef = yield* SubscriptionRef.make<CompanionStatus>({ _tag: "Checking" })
   const wakes = yield* Queue.unbounded<void>()
 
@@ -103,7 +112,7 @@ const make = Effect.gen(function*() {
 
   const profileId = store.profileId(() => profileIdFromBytes(crypto.getRandomValues(new Uint8Array(16))))
 
-  /** Serves `TabToolRpcs` to the host until `gone`. The port's only client is the broker. */
+  /** Serves `CompanionWorkerRpcs` to the host until `gone`. The port's only client is the broker. */
   const serve = (port: NativePort, requests: Queue.Dequeue<RpcFromClient>, gone: Deferred.Deferred<string | undefined>) =>
     Effect.gen(function*() {
       const protocol = yield* RpcServer.Protocol.make((writeRequest) =>
@@ -134,9 +143,9 @@ const make = Effect.gen(function*() {
         })
       )
       // A handler that dies fails only its own call.
-      yield* RpcServer.make(TabToolRpcs, { disableTracing: true, disableFatalDefects: true }).pipe(
+      yield* RpcServer.make(CompanionWorkerRpcs, { disableTracing: true, disableFatalDefects: true }).pipe(
         Effect.provideService(RpcServer.Protocol, protocol),
-        Effect.provide(toolHandlers),
+        Effect.provide(handlers),
         Effect.forkScoped
       )
     })

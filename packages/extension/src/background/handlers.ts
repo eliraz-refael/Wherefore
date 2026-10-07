@@ -1,10 +1,11 @@
 /**
  * The worker's RPC handlers: `WorkerRpcs` (core rpc.ts) implemented with `TabTools`, `Store`,
- * `RunLocks` and `CompanionLink`, and the layer that serves them to extension pages.
+ * `RunLocks`, `CompanionLink` and `CompanionRuns`, and the layer that serves them to extension pages.
  */
 import { ItemNotFound, WorkerRpcs } from "@wherefore/core"
 import { Effect, Layer } from "effect"
 import { CompanionLink } from "../companion/CompanionLink.ts"
+import { CompanionRuns } from "../companion/CompanionRuns.ts"
 import { layerServerProtocol, type PortListener } from "../messaging/server.ts"
 import { RunLocks } from "../runs/RunLocks.ts"
 import { itemsKey } from "../store/keys.ts"
@@ -18,6 +19,7 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
   const store = yield* Store
   const locks = yield* RunLocks
   const companion = yield* CompanionLink
+  const companionRuns = yield* CompanionRuns
   return WorkerRpcs.of({
     ...tabToolHandlers(tools),
     close_tabs: ({ tabIds, keepWindowAlive }) => tools.closeTabs(tabIds, { keepWindowAlive }),
@@ -40,6 +42,8 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
       Effect.andThen(store.saveRun(run), store.interruptRuns(locks.isLive, run.id)).pipe(Effect.asVoid),
     check_runs: () => store.interruptRuns(locks.isLive).pipe(Effect.asVoid),
     set_run_reviewed: ({ id, reviewed }) => store.setRunReviewed(id, reviewed),
+    answer_ask: ({ runId, askId, answers }) => companionRuns.answer(runId, askId, answers),
+    stop_run: ({ id }) => companionRuns.stop(id),
     check_companion: () => companion.check
   })
 }))
@@ -48,7 +52,11 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
  * Serves `WorkerRpcs` on every Port from the extension's pages. A handler that dies fails only its
  * own call (`disableFatalDefects`), not every call the page has in flight.
  */
-export const serveWorkerRpcs: Layer.Layer<never, never, TabTools | Store | RunLocks | CompanionLink | PortListener> = RpcServer.layer(
+export const serveWorkerRpcs: Layer.Layer<
+  never,
+  never,
+  TabTools | Store | RunLocks | CompanionLink | CompanionRuns | PortListener
+> = RpcServer.layer(
   WorkerRpcs,
   { disableTracing: true, disableFatalDefects: true }
 ).pipe(Layer.provide([WorkerHandlers, layerServerProtocol]))

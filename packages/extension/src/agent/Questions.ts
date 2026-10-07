@@ -5,14 +5,13 @@
  * `makeInbox` is a ready implementation for a page: it publishes the pending questions and takes
  * the first answer to each ask, from wherever it comes. A second answer finds the ask closed and
  * is ignored, so several views can offer the same questions ("the first panel to answer wins").
+ * The worker keeps one too, for the questions of runs the companion drives (`CompanionRuns`).
  */
-import type { Answer, Question, RunId } from "@wherefore/core"
-import { Context, Deferred, Effect, Layer, Schema, SubscriptionRef } from "effect"
+import { type Answer, type Question, QuestionsUnavailable, type RunId } from "@wherefore/core"
+import { Context, Deferred, Effect, Layer, SubscriptionRef } from "effect"
 
 /** Nobody can answer right now. The model is told and goes on with its best guess. */
-export class QuestionsUnavailable extends Schema.TaggedError<QuestionsUnavailable>()("QuestionsUnavailable", {
-  message: Schema.String
-}) {}
+export { QuestionsUnavailable }
 
 export interface Ask {
   /** Unique per `ask_user` call (its tool call id). */

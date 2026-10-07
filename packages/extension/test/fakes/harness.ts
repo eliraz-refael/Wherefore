@@ -32,6 +32,10 @@ export class Harness {
   private onConnect = new FakeOnConnect()
   readonly pairs: Array<{ readonly page: FakePort; readonly worker: FakePort }> = []
   private workerScope: Scope.Closeable | undefined
+  /** The running worker's client of the lock manager. */
+  private workerLocks: { readonly id: number } | undefined
+  /** Scopes of workers that crashed: closed (for cleanup only) with the next `killWorker`. */
+  private readonly crashed: Array<Scope.Closeable> = []
   /**
    * Fault hook: a page's `save_run` call fails with `WorkerUnavailable`, without reaching the
    * worker, while this returns true for the run being saved.
@@ -53,9 +57,11 @@ export class Harness {
     return Effect.gen({ self: this }, function*() {
       const scope = yield* Scope.make()
       this.workerScope = scope
+      const locks = this.locks.runLocks()
+      this.workerLocks = locks.client
       yield* Layer.buildWithScope(
         WorkerLayer.pipe(
-          Layer.provide([this.chrome.layer, this.locks.runLocks().layer, this.native.layer, Layer.succeed(PortListener)(ports)])
+          Layer.provide([this.chrome.layer, locks.layer, this.native.layer, Layer.succeed(PortListener)(ports)])
         ),
         scope
       )
@@ -65,9 +71,21 @@ export class Harness {
   /** Chrome stops the worker: its Ports disconnect, its memory is gone. */
   readonly killWorker = Effect.suspend(() => {
     for (const { worker } of this.pairs) worker.disconnect()
-    const scope = this.workerScope
+    const scopes = [...this.crashed.splice(0), ...(this.workerScope === undefined ? [] : [this.workerScope])]
     this.workerScope = undefined
-    return scope === undefined ? Effect.void : Scope.close(scope, Exit.void)
+    return Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true })
+  })
+
+  /**
+   * Chrome kills the worker without running any of its code: its Ports disconnect and its Web Locks
+   * are dropped. (Its fibers are cleaned up with the next `killWorker`.)
+   */
+  readonly crashWorker = Effect.sync(() => {
+    for (const { worker } of this.pairs) worker.disconnect()
+    if (this.workerLocks !== undefined) this.locks.close(this.workerLocks)
+    if (this.workerScope !== undefined) this.crashed.push(this.workerScope)
+    this.workerScope = undefined
+    this.workerLocks = undefined
   })
 
   readonly connector: PortConnector["Service"] = {
