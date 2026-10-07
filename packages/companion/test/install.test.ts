@@ -116,6 +116,7 @@ describe("install plan", () => {
       'if [ ! -x "$node" ]; then',
       expect.stringContaining("command -v node"),
       "fi",
+      'export WHEREFORE_NODE="$node" WHEREFORE_CLI="$cli"',
       'exec "$node" "$cli" native-host "$@"',
       ""
     ])
