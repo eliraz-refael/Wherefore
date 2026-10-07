@@ -61,7 +61,10 @@ export const isWhereforeTool = (toolCall: ToolCall): boolean => {
   return [toolCall.name, toolCall.title].some((name) => typeof name === "string" && OUR_NAMES.has(name.trim()))
 }
 
-/** The answer to a permission request: allow ours once (never "always"), refuse everything else. */
+/**
+ * The answer to a permission request: allow ours (once, or "always" only when the agent offers no
+ * once), refuse everything else.
+ */
 export const decidePermission = (
   request: RequestPermissionRequest
 ): { readonly allowed: boolean; readonly response: RequestPermissionResponse } => {

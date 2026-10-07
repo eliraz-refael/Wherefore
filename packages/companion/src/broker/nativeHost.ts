@@ -255,7 +255,8 @@ export const runNativeHost = (
 
     const link = yield* makeWorkerLink({ send: port.send, inbox })
     const agents = yield* Layer.build(AgentProcesses.layer)
-    const mcp = options.mcp ?? mcpLauncher(process.env, { node: process.execPath, cli: process.argv[1] ?? "" })
+    const env = options.env ?? process.env
+    const mcp = options.mcp ?? mcpLauncher(env, { node: process.execPath, cli: process.argv[1] ?? "" })
     yield* serveWorkerCalls(
       port.send,
       workerCalls,
@@ -269,7 +270,7 @@ export const runNativeHost = (
             location: options.location,
             companionVersion: options.companionVersion,
             mcp,
-            env: options.env ?? process.env
+            env
           }).pipe(Stream.provideContext(agents))
       }))
     )
