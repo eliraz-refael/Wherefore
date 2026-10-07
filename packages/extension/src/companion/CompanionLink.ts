@@ -10,6 +10,11 @@
  * ACP agents. When the port goes away, every call in flight on it is interrupted, which ends the
  * leases of the companion's runs (they are marked interrupted).
  *
+ * **The other direction (M2 PR C).** The worker also calls the broker on the same port, as an RPC
+ * client of `AgentRpcs` (`ToBroker` frames out, `FromBroker` frames in): `startAgent` asks it to
+ * start the ACP agent for a run the panel created. It fails with `CompanionNotConnected` when there
+ * is no connection, or when the port goes away while the agent runs.
+ *
  * **Reconnect policy.**
  * - Host not found: status `NotInstalled`, and no retries. The worker tries again at its next
  *   start, or when a view calls `check_companion` (e.g. "Check again" after installing).
@@ -23,6 +28,12 @@
  * The status is kept in `chrome.storage.session` (`companionStatusKey`), so every view can show it.
  */
 import {
+  type AgentEvent,
+  type AgentPrefs,
+  AgentRpcs,
+  type AgentRunError,
+  COMPANION_NOT_CONNECTED_MESSAGE,
+  CompanionNotConnected,
   CompanionWorkerRpcs,
   type CompanionStatus,
   CompanionStatus as CompanionStatusSchema,
@@ -31,7 +42,9 @@ import {
   type NativeWelcome,
   type ProfileId,
   profileIdFromBytes,
-  type RpcFromClient
+  type RpcFromClient,
+  type RpcFromServer,
+  type RunId
 } from "@wherefore/core"
 import { Clock, Context, Deferred, Duration, Effect, Layer, Queue, Schema, Stream, SubscriptionRef } from "effect"
 import { Store } from "../background/Store.ts"
@@ -39,7 +52,7 @@ import { TabTools } from "../background/TabTools.ts"
 import { tabToolHandlers } from "../background/toolHandlers.ts"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
 import { companionStatusKey } from "../store/keys.ts"
-import { type RpcMessage, RpcSerialization, RpcServer } from "../unstable.ts"
+import { RpcClient, RpcClientError, type RpcMessage, RpcSerialization, RpcServer } from "../unstable.ts"
 import { CompanionRuns } from "./CompanionRuns.ts"
 import { NativeConnector, type NativePort } from "./NativeConnector.ts"
 
@@ -57,9 +70,24 @@ export const STABLE_AFTER = Duration.seconds(30)
 export const retryDelay = (attempt: number): Duration.Duration =>
   Duration.millis(Math.min(1000 * 2 ** (attempt - 1), 60_000))
 
+/** What the worker asks the broker for when the panel starts an ACP run. */
+export interface StartAgent {
+  readonly runId: RunId
+  readonly command: string
+  readonly prefs: AgentPrefs
+}
+
+/** The companion went away while its agent was running. */
+export const COMPANION_LOST_MESSAGE = "The companion disconnected (Chrome closed its connection, or the companion stopped)."
+
 export class CompanionLink extends Context.Service<CompanionLink, {
   /** The link's current state. */
   readonly status: Effect.Effect<CompanionStatus>
+  /**
+   * ACP mode: has the broker start the agent for run `runId` and follows it (core `AgentRpcs`).
+   * Interrupting the stream stops the agent (its whole process tree).
+   */
+  readonly startAgent: (request: StartAgent) => Stream.Stream<AgentEvent, AgentRunError | CompanionNotConnected>
   /**
    * Connects now unless connected or already connecting, and returns the state that attempt
    * reached (or the current one after a few seconds, if it hasn't settled).
@@ -84,6 +112,12 @@ type Outcome =
 const encodeStatus = Schema.encodeSync(CompanionStatusSchema)
 const decodeHostFrame = Schema.decodeUnknownExit(HostToExtension)
 
+/** The worker's client of the broker's `AgentRpcs`, on one connection. */
+type AgentClient = (
+  tag: "start_agent",
+  payload: StartAgent
+) => Stream.Stream<AgentEvent, AgentRunError | RpcClientError.RpcClientError>
+
 const describe = (welcomed: boolean, error: string | undefined): string =>
   welcomed
     ? `The companion disconnected${error === undefined ? "" : ` (${error})`}.`
@@ -102,6 +136,8 @@ const make = Effect.gen(function*() {
     ask_panel: ({ runId, askId, questions }) => runs.ask(runId, askId, questions)
   }))
   const statusRef = yield* SubscriptionRef.make<CompanionStatus>({ _tag: "Checking" })
+  /** The current connection's client of the broker, while connected. */
+  let agentClient: AgentClient | undefined
   const wakes = yield* Queue.unbounded<void>()
 
   const setStatus = (status: CompanionStatus) =>
@@ -150,6 +186,54 @@ const make = Effect.gen(function*() {
       )
     })
 
+  /**
+   * The worker's client of the broker's `AgentRpcs` on this port. When the port goes away, its calls
+   * fail (never hang).
+   */
+  const brokerClient = (port: NativePort, replies: Queue.Dequeue<RpcFromServer>, gone: Deferred.Deferred<string | undefined>) =>
+    Effect.gen(function*() {
+      const protocol = yield* RpcClient.Protocol.make((writeResponse, clientIds) =>
+        Effect.gen(function*() {
+          let closed = false
+          const broadcast = (message: RpcMessage.FromServerEncoded) =>
+            Effect.forEach(clientIds, (clientId) => writeResponse(clientId, message), { discard: true })
+          yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(replies), (reply) => broadcast(reply as RpcMessage.FromServerEncoded))))
+          yield* Effect.forkScoped(Effect.andThen(Deferred.await(gone), Effect.suspend(() => {
+            closed = true
+            return broadcast({
+              _tag: "ClientProtocolError",
+              error: new RpcClientError.RpcClientError({ reason: new RpcClientError.RpcClientDefect({ message: COMPANION_LOST_MESSAGE, cause: undefined }) })
+            })
+          })))
+          return {
+            send: (_clientId, request) =>
+              Effect.suspend(() => {
+                if (closed) {
+                  return Effect.fail(
+                    new RpcClientError.RpcClientError({ reason: new RpcClientError.RpcClientDefect({ message: COMPANION_LOST_MESSAGE, cause: undefined }) })
+                  )
+                }
+                try {
+                  port.postMessage({ _tag: "ToBroker", rpc: request })
+                  return Effect.void
+                } catch {
+                  return Effect.fail(
+                    new RpcClientError.RpcClientError({ reason: new RpcClientError.RpcClientDefect({ message: COMPANION_LOST_MESSAGE, cause: undefined }) })
+                  )
+                }
+              }),
+            supportsAck: true,
+            supportsTransferables: false,
+            codecFor: RpcSerialization.json.codecFor
+          }
+        })
+      )
+      const client = yield* RpcClient.make(AgentRpcs, { flatten: true, disableTracing: true }).pipe(
+        Effect.provideService(RpcClient.Protocol, protocol)
+      )
+      return client as AgentClient
+    })
+
   /** One connection, from `connectNative` until the port is gone. */
   const connectOnce = (id: ProfileId): Effect.Effect<Outcome> =>
     Effect.scoped(Effect.gen(function*() {
@@ -159,6 +243,7 @@ const make = Effect.gen(function*() {
       const welcome = yield* Deferred.make<NativeWelcome>()
       const gone = yield* Deferred.make<string | undefined>()
       const requests = yield* Queue.unbounded<RpcFromClient>()
+      const brokerReplies = yield* Queue.unbounded<RpcFromServer>()
       const onMessage = (message: unknown) => {
         const frame = decodeHostFrame(message)
         if (frame._tag === "Failure") {
@@ -166,6 +251,7 @@ const make = Effect.gen(function*() {
           return
         }
         if (frame.value._tag === "Welcome") Deferred.doneUnsafe(welcome, Effect.succeed(frame.value))
+        else if (frame.value._tag === "FromBroker") Queue.offerUnsafe(brokerReplies, frame.value.rpc)
         else Queue.offerUnsafe(requests, frame.value.rpc)
       }
       const onDisconnect = (error: string | undefined) => {
@@ -205,8 +291,19 @@ const make = Effect.gen(function*() {
 
       const since = yield* Clock.currentTimeMillis
       yield* serve(port, requests, gone)
+      const client = yield* brokerClient(port, brokerReplies, gone)
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          agentClient = client
+        }),
+        () =>
+          Effect.sync(() => {
+            if (agentClient === client) agentClient = undefined
+          })
+      )
       yield* setStatus({ _tag: "Connected", profileId: id, companionVersion: greeting.companionVersion, since })
       const error = yield* Deferred.await(gone)
+      agentClient = undefined
       return { _tag: "Lost", message: describe(true, error), upFor: (yield* Clock.currentTimeMillis) - since } as const
     }))
 
@@ -282,5 +379,17 @@ const make = Effect.gen(function*() {
     return settled._tag === "Some" && settled.value._tag === "Some" ? settled.value.value : yield* SubscriptionRef.get(statusRef)
   })
 
-  return CompanionLink.of({ status: SubscriptionRef.get(statusRef), check })
+  const startAgent = (request: StartAgent): Stream.Stream<AgentEvent, AgentRunError | CompanionNotConnected> =>
+    Stream.suspend(() => {
+      const client = agentClient
+      if (client === undefined) return Stream.fail(new CompanionNotConnected({ message: COMPANION_NOT_CONNECTED_MESSAGE }))
+      return client("start_agent", request).pipe(
+        Stream.catchIf(
+          (error): error is RpcClientError.RpcClientError => error instanceof RpcClientError.RpcClientError,
+          () => Stream.fail(new CompanionNotConnected({ message: COMPANION_LOST_MESSAGE }))
+        )
+      )
+    })
+
+  return CompanionLink.of({ status: SubscriptionRef.get(statusRef), check, startAgent })
 })

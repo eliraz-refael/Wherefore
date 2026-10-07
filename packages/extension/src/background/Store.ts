@@ -16,6 +16,7 @@
  * unreadable run is backed up and refused on its own: the other runs keep working.
  */
 import {
+  type AgentOptions,
   type BrowserError,
   cancelRun,
   interruptRun,
@@ -39,7 +40,7 @@ import {
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
 import { ChromeApi } from "../chrome/ChromeApi.ts"
-import { itemsKey, profileKey, runIndexKey, runKey, runKeyPrefix, settingsKey, storeKeys } from "../store/keys.ts"
+import { agentOptionsKey, itemsKey, profileKey, runIndexKey, runKey, runKeyPrefix, settingsKey, storeKeys } from "../store/keys.ts"
 import { decodeStored, encodeStored, type StoreKey } from "../store/StoreKey.ts"
 
 export type StoreError = StoreUnreadable | BrowserError
@@ -69,6 +70,8 @@ export class Store extends Context.Service<Store, {
   readonly removeItem: (id: SavedItemId) => Effect.Effect<RemovedItem, ItemNotFound | StoreError>
   readonly restoreItem: (removed: RemovedItem) => Effect.Effect<void, StoreError>
   readonly updateSettings: (settings: Settings) => Effect.Effect<Settings, StoreError>
+  /** Records what the ACP agent offered on its last run (Settings shows it). */
+  readonly saveAgentOptions: (options: AgentOptions) => Effect.Effect<void, StoreError>
   /**
    * Stores a run under its own key: replaces the one with the same id, or adds it, keeping the
    * newest `MAX_RUNS` (older run keys are removed). Fails if the stored copy of this run, or the
@@ -321,6 +324,7 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
         })),
     restoreItem: (removed) => update(itemsKey, (items) => Effect.succeed([undefined, restoreItem(items, removed)] as const)),
     updateSettings: (settings) => update(settingsKey, () => Effect.succeed([settings, settings] as const)),
+    saveAgentOptions: (options) => update(agentOptionsKey, () => Effect.succeed([undefined, options] as const)),
     saveRun,
     interruptRuns
   }

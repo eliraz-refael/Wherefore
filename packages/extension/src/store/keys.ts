@@ -1,7 +1,7 @@
 /**
  * Everything the extension keeps in `chrome.storage.local` (architecture A5).
  */
-import { defaultSettings, ProfileId, Run, type RunId, RunIndexEntry, SavedItem, Settings } from "@wherefore/core"
+import { AgentOptions, defaultSettings, ProfileId, Run, type RunId, RunIndexEntry, SavedItem, Settings } from "@wherefore/core"
 import { Schema } from "effect"
 import type { StoreKey } from "./StoreKey.ts"
 
@@ -66,8 +66,21 @@ export const profileKey: StoreKey<{ readonly id: ProfileId } | undefined> = {
   empty: undefined
 }
 
+/**
+ * What the ACP agent offered on its last run (model, effort), for Settings, with the command it
+ * came from: another command's agent offers other settings. Written by the worker when an ACP run
+ * starts; `undefined` until the first one.
+ */
+export const agentOptionsKey: StoreKey<AgentOptions | undefined> = {
+  name: "agentOptions",
+  version: 1,
+  schema: Schema.UndefinedOr(AgentOptions),
+  migrations: {},
+  empty: undefined
+}
+
 /** Every fixed key, for startup migration. Run keys are found through `runIndexKey`. */
-export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey, runIndexKey, profileKey]
+export const storeKeys: ReadonlyArray<StoreKey<unknown>> = [itemsKey, settingsKey, runIndexKey, profileKey, agentOptionsKey]
 
 /**
  * The worker's link to the companion (core `CompanionStatus`), in `chrome.storage.session`: it
