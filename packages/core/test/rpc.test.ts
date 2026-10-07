@@ -67,6 +67,7 @@ describe("WorkerRpcs", () => {
       "set_run_reviewed",
       "answer_ask",
       "stop_run",
+      "start_agent_run",
       "check_companion"
     ])
   })

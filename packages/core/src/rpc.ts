@@ -20,6 +20,7 @@
  * this profile and asks its questions in this profile's side panel.
  */
 import { Schema } from "effect"
+import { CompanionNotConnected } from "./agent.ts"
 import { CompanionStatus } from "./companion.ts"
 import { RunId, SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
 import { Answer, Question } from "./intention.ts"
@@ -70,7 +71,8 @@ export class RunAlreadyActive extends Schema.TaggedError<RunAlreadyActive>()("Ru
 
 /**
  * A companion run's update or question arrived after the run ended in the extension (the user
- * stopped it, or it was never opened on this connection). The run's owner should stop.
+ * stopped it, or it was never opened on this connection), or an ACP run's MCP session asked for a
+ * run the panel didn't start. The run's owner should stop.
  */
 export class RunNotActive extends Schema.TaggedError<RunNotActive>()("RunNotActive", {
   runId: RunId,
@@ -227,7 +229,17 @@ export const RunRpcs = RpcGroup.make(
    * Stops a companion run (MCP, ACP): it is stored as cancelled at once and its agent is told. A run
    * that isn't the companion's, or isn't running, is left alone.
    */
-  Rpc.make("stop_run", { payload: { id: RunId }, error: StoreError })
+  Rpc.make("stop_run", { payload: { id: RunId }, error: StoreError }),
+  /**
+   * Tidy up through the companion (ACP mode, M2 PR C): the worker creates the run (`mode: "acp"`),
+   * holds it as the profile's one active run, and asks the companion's broker to start the agent
+   * with the command and preferences in the user's Settings. Returns the run's id as soon as the run
+   * is stored, so the panel shows it at once; the agent's progress and result arrive in the run.
+   */
+  Rpc.make("start_agent_run", {
+    success: RunId,
+    error: Schema.Union([RunAlreadyActive, CompanionNotConnected, StoreUnreadable, BrowserError])
+  })
 )
 
 // ---------- the companion ----------
@@ -257,12 +269,13 @@ export const RunSignal = Schema.Union([
 ])
 export type RunSignal = typeof RunSignal.Type
 
-export const OpenRunError = Schema.Union([RunAlreadyActive, StoreUnreadable, BrowserError])
+export const OpenRunError = Schema.Union([RunAlreadyActive, RunNotActive, StoreUnreadable, BrowserError])
 export type OpenRunError = typeof OpenRunError.Type
 
 /**
  * Leases a run for the companion: while this stream is open, run `id` is the profile's one active
- * run, owned by the caller. The worker holds the run's Web Locks for it (architecture A4), so an
+ * run, owned by the caller. With `mode: "acp"` it attaches to the run the panel started instead
+ * (`start_agent_run`), which the worker already holds; any other id fails with `RunNotActive`. The worker holds the run's Web Locks for it (architecture A4), so an
  * API-mode run can't start meanwhile, and views see the run as alive. Nothing is stored until the
  * first `update_run`.
  *

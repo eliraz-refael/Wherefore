@@ -62,6 +62,11 @@ describe("native port frames", () => {
     expect(decodeOk(HostToExtension, { _tag: "ToWorker", rpc: request })).toEqual({ _tag: "ToWorker", rpc: request })
     const exit = { _tag: "Exit", requestId: "1", exit: { _tag: "Success", value: { tabs: [] } } }
     expect(decodeOk(ExtensionToHost, { _tag: "FromWorker", rpc: exit })).toEqual({ _tag: "FromWorker", rpc: exit })
+    // The other direction (M2 PR C): the worker calls the broker.
+    expect(decodeOk(ExtensionToHost, { _tag: "ToBroker", rpc: request })).toEqual({ _tag: "ToBroker", rpc: request })
+    expect(decodeOk(HostToExtension, { _tag: "FromBroker", rpc: exit })).toEqual({ _tag: "FromBroker", rpc: exit })
+    expect(rejects(HostToExtension, { _tag: "ToBroker", rpc: request })).toBe(true)
+    expect(rejects(ExtensionToHost, { _tag: "FromBroker", rpc: exit })).toBe(true)
   })
 
   it("rejects frames sent the wrong way or malformed", () => {

@@ -11,8 +11,9 @@
  *    `effect/unstable/rpc` client message, `FromWorker` the worker's reply. The payloads are the
  *    RPC protocol's own encoded envelopes, the same ones pages use over their Ports.
  *
- * Room to grow: calls the other way (the panel starting an ACP run, M2 PR C) add their own frame
- * tags (`ToBroker`/`FromBroker`) to these unions, on the same port.
+ * 3. Calls the other way (M2 PR C): the worker calls the broker's `AgentRpcs` (agent.ts) to start
+ *    an ACP agent for a run the panel created. `ToBroker` carries the worker's client message,
+ *    `FromBroker` the broker's reply, on the same port.
  */
 import { Schema } from "effect"
 import { ProfileId } from "./ids.ts"
@@ -34,8 +35,11 @@ export const EXTENSION_ORIGIN = `chrome-extension://${EXTENSION_ID}/`
  */
 export const NATIVE_HOST_NAME = "io.github.eliraz_refael.wherefore"
 
-/** Bumped when the frames below change incompatibly. Both sides refuse a different version. */
-export const NATIVE_PROTOCOL_VERSION = 1
+/**
+ * Bumped when the frames below change incompatibly. Both sides refuse a different version.
+ * 2 (M2 PR C): `ToBroker`/`FromBroker`, so a broker that can't start agents says so at the handshake.
+ */
+export const NATIVE_PROTOCOL_VERSION = 2
 
 /** Chrome's limit on one message from a native host to the extension (1 MB). */
 export const NATIVE_MESSAGE_MAX_BYTES = 1024 * 1024
@@ -120,10 +124,15 @@ export const ToWorkerFrame = Schema.TaggedStruct("ToWorker", { rpc: RpcFromClien
 /** The worker answers the broker. */
 export const FromWorkerFrame = Schema.TaggedStruct("FromWorker", { rpc: RpcFromServer })
 
-export const ExtensionToHost = Schema.Union([NativeHello, FromWorkerFrame])
+/** The worker calls the broker (`AgentRpcs`). */
+export const ToBrokerFrame = Schema.TaggedStruct("ToBroker", { rpc: RpcFromClient })
+/** The broker answers the worker. */
+export const FromBrokerFrame = Schema.TaggedStruct("FromBroker", { rpc: RpcFromServer })
+
+export const ExtensionToHost = Schema.Union([NativeHello, FromWorkerFrame, ToBrokerFrame])
 export type ExtensionToHost = typeof ExtensionToHost.Type
 
-export const HostToExtension = Schema.Union([NativeWelcome, ToWorkerFrame])
+export const HostToExtension = Schema.Union([NativeWelcome, ToWorkerFrame, FromBrokerFrame])
 export type HostToExtension = typeof HostToExtension.Type
 
 // ---------- status ----------

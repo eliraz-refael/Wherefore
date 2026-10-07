@@ -127,6 +127,11 @@ export const RunErrorReason = Schema.Literals([
   "worker", // the extension's background worker failed
   "storage", // stored data couldn't be read
   "interrupted", // the page or agent running it went away
+  "companion", // ACP mode: the companion isn't connected (or went away before the agent started)
+  "agent_not_found", // ACP mode: the agent's command wasn't found
+  "agent_login", // ACP mode: the agent isn't logged in
+  "agent_crashed", // ACP mode: the agent's process exited before it finished
+  "agent_failed", // ACP mode: the agent couldn't run the tidy-up
   "unexpected"
 ])
 export type RunErrorReason = typeof RunErrorReason.Type
