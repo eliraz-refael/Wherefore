@@ -5,12 +5,15 @@
  * real `wherefore mcp --profile … --run …` the session gave it and runs the tidy-up through it.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { type AgentEvent, CLAUDE_CODE_AGENT, DEFAULT_AGENT_COMMAND, KICKOFF } from "@wherefore/core"
-import { existsSync, readFileSync } from "node:fs"
+import { type AgentEvent, type AgentPrefs, CLAUDE_CODE_AGENT, DEFAULT_AGENT_COMMAND, KICKOFF, type RunId } from "@wherefore/core"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import * as NodePath from "node:path"
 import { fileURLToPath } from "node:url"
-import { Effect, Exit, Fiber, Stream } from "effect"
-import { CLAUDE_CODE_SESSION_META } from "../src/acp/AgentRun.ts"
+import { Duration, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { TestClock } from "effect/testing"
+import { AgentProcesses } from "../src/acp/AgentProcess.ts"
+import { CLAUDE_CODE_SESSION_META, IDLE_TIMEOUT, runAgent, SETUP_TIMEOUT } from "../src/acp/AgentRun.ts"
+import { NodeChildProcessSpawner, NodeFileSystem, NodePath as NodePathLayer } from "../src/unstable.ts"
 import { PROFILE, sampleTabs, startFakeChrome, tempLocation } from "./fakes.ts"
 import { eventually, runCli, startMcp } from "./mcpProcess.ts"
 
@@ -47,10 +50,12 @@ const acpChrome = Effect.gen(function*() {
   })
   yield* chrome.welcome
   yield* chrome.entry
-  const logged = (): Array<Record<string, any>> =>
-    existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line)) : []
-  return { chrome, home, logged }
+  return { chrome, home, logged: loggedIn(logFile) }
 })
+
+/** What the fake agent logged in `logFile` so far. */
+const loggedIn = (logFile: string) => (): Array<Record<string, any>> =>
+  existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line)) : []
 
 /** Runs an agent to its end; the events, and the error if it failed. */
 const runToEnd = (stream: Stream.Stream<AgentEvent, unknown>) =>
@@ -167,6 +172,37 @@ describe("ACP mode", () => {
       expect((error as { message: string }).message).toMatch(/^The agent stopped unexpectedly \(exit code 3\)/)
     }), 60_000)
 
+  it.live("refuses to run when the permission mode can't be set back to default (fail closed)", () =>
+    Effect.gen(function*() {
+      const { chrome, logged } = yield* acpChrome
+      const { events, error } = yield* runToEnd(chrome.startAgent("run-acp-11", fakeAgentCommand("loosemode")))
+      expect(error).toMatchObject({ _tag: "AgentFailed" })
+      expect((error as { message: string }).message).toContain('its permission mode ("bypassPermissions") skips permission requests')
+      expect(events.map((event) => event._tag)).toEqual(["Started"])
+      expect(logged().some((entry) => entry.event === "prompt")).toBe(false)
+    }), 60_000)
+
+  it.live("the agent's MCP server is launched from the agent's environment (WHEREFORE_NODE, WHEREFORE_CLI)", () =>
+    Effect.gen(function*() {
+      const location = yield* tempLocation
+      const home = location.env["WHEREFORE_HOME"] ?? ""
+      const logFile = NodePath.join(home, "agent.log")
+      // No `mcp` override: the broker picks the launcher from the environment it gives the agent.
+      const chrome = yield* startFakeChrome({
+        location,
+        env: { ...process.env, WHEREFORE_HOME: home, FAKE_AGENT_LOG: logFile, WHEREFORE_NODE: "/opt/wherefore/node", WHEREFORE_CLI: "/opt/wherefore/cli.js" }
+      })
+      yield* chrome.welcome
+      yield* chrome.entry
+      // `login` logs the session it was asked for, then refuses it.
+      yield* runToEnd(chrome.startAgent("run-acp-12", fakeAgentCommand("login")))
+      const session = loggedIn(logFile)().find((entry) => entry.event === "session")
+      expect(session?.mcpServers).toMatchObject([{
+        command: "/opt/wherefore/node",
+        args: ["/opt/wherefore/cli.js", "mcp", "--profile", PROFILE, "--run", "run-acp-12"]
+      }])
+    }), 60_000)
+
   it.live("reports an agent that isn't logged in", () =>
     Effect.gen(function*() {
       const { chrome } = yield* acpChrome
@@ -219,5 +255,115 @@ describe("ACP mode", () => {
       expect(unscoped.stderr).toContain("--run needs --profile")
       const bad = yield* runCli(home, ["mcp", "--profile", PROFILE, "--run", "bad id; rm"])
       expect(bad.code).toBe(1)
+    }), 60_000)
+})
+
+/** The agent's processes, for `runAgent` without a broker. */
+const agentProcesses = AgentProcesses.layer.pipe(
+  Layer.provide(NodeChildProcessSpawner.layer.pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer))))
+)
+
+/**
+ * `runAgent` alone (no broker) on the fake agent in `scenario`, forked: what the fake agent logged,
+ * and `go()` to let a `slowtool` agent's tool call complete. Its MCP server is never started.
+ */
+const runAlone = (scenario: string, prefs: AgentPrefs = {}) =>
+  Effect.gen(function*() {
+    const location = yield* tempLocation
+    const logFile = NodePath.join(location.env["WHEREFORE_HOME"] ?? "", "agent.log")
+    const fiber = yield* runToEnd(
+      runAgent({
+        runId: "run-alone" as RunId,
+        command: fakeAgentCommand(scenario),
+        prefs,
+        profile: PROFILE,
+        location,
+        companionVersion: "9.9.9",
+        mcp: { node: process.execPath, cli: cliSource },
+        env: { ...process.env, ...location.env, FAKE_AGENT_LOG: logFile }
+      }).pipe(Stream.provide(agentProcesses))
+    ).pipe(Effect.forkChild)
+    return { fiber, logged: loggedIn(logFile), go: () => writeFileSync(`${logFile}.go`, "") }
+  })
+
+const settingsOf = (events: ReadonlyArray<AgentEvent>) => {
+  const settings = events.find((event) => event._tag === "Settings")
+  return settings?._tag === "Settings" ? settings.settings.map((setting) => [setting.id, setting.value]) : undefined
+}
+
+describe("ACP runs (runAgent)", () => {
+  it.effect("the idle timeout doesn't run while a tool call is in flight (ask_user waiting for the user)", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("slowtool")
+      yield* eventually(() => run.logged().some((entry) => entry.event === "tool_waiting"), 30_000)
+      // Well past the idle limit, with the agent's tool call still going: the run goes on.
+      yield* TestClock.adjust(Duration.sum(IDLE_TIMEOUT, Duration.minutes(5)))
+      expect(run.fiber.pollUnsafe()).toBeUndefined()
+      run.go()
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toBeUndefined()
+      expect(events.at(-1)).toEqual({ _tag: "Finished", stopReason: "end_turn" })
+      expect(run.logged().some((entry) => entry.event === "tool_done")).toBe(true)
+    }), 60_000)
+
+  it.effect("the idle timeout fails a run that goes quiet with nothing in flight", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("silent")
+      yield* eventually(() => run.logged().some((entry) => entry.event === "prompt"), 30_000)
+      yield* TestClock.adjust(Duration.sum(IDLE_TIMEOUT, Duration.seconds(15)))
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toMatchObject({ _tag: "AgentFailed" })
+      expect((error as { message: string }).message).toContain(`it stopped responding for ${Duration.toMinutes(IDLE_TIMEOUT)} minutes`)
+      expect(events.map((event) => event._tag)).toEqual(["Started", "Settings", "Working"])
+    }), 60_000)
+
+  it.live("a value the agent refuses (a JSON-RPC error) is skipped, and the setup goes on", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("refuse")
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toBeUndefined()
+      expect(settingsOf(events)).toEqual([["model", "default"], ["effort", "medium"]])
+      expect(run.logged().filter((entry) => entry.event === "set").map((entry) => [entry.id, entry.value])).toEqual([
+        ["mode", "default"],
+        ["model", "sonnet"],
+        ["effort", "medium"]
+      ])
+      expect(events.at(-1)).toEqual({ _tag: "Finished", stopReason: "end_turn" })
+    }), 60_000)
+
+  it.effect("a settings change that never gets an answer fails the run, instead of carrying on", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("hangset")
+      yield* eventually(() => run.logged().some((entry) => entry.event === "set" && entry.id === "model"), 30_000)
+      yield* TestClock.adjust(SETUP_TIMEOUT)
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toMatchObject({ _tag: "AgentFailed" })
+      expect((error as { message: string }).message).toContain("it didn't answer a settings change in time.")
+      expect(events.map((event) => event._tag)).toEqual(["Started"])
+      expect(run.logged().some((entry) => entry.event === "set" && entry.id === "effort")).toBe(false)
+      expect(run.logged().some((entry) => entry.event === "prompt")).toBe(false)
+    }), 60_000)
+
+  it.live("a setting that appears only after a model change still gets its preference", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("effortbymodel")
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toBeUndefined()
+      expect(run.logged().filter((entry) => entry.event === "set").map((entry) => [entry.id, entry.value])).toEqual([
+        ["mode", "default"],
+        ["model", "sonnet"],
+        ["effort", "medium"]
+      ])
+      expect(settingsOf(events)).toEqual([["model", "sonnet"], ["effort", "medium"]])
+    }), 60_000)
+
+  it.live("refuses to run when the agent's answer to the mode change leaves the mode out (fail closed)", () =>
+    Effect.gen(function*() {
+      const run = yield* runAlone("dropmode")
+      const { events, error } = yield* Fiber.join(run.fiber)
+      expect(error).toMatchObject({ _tag: "AgentFailed" })
+      expect((error as { message: string }).message).toContain(`couldn't be set back to "default"`)
+      expect(events.map((event) => event._tag)).toEqual(["Started"])
+      expect(run.logged().some((entry) => entry.event === "prompt")).toBe(false)
     }), 60_000)
 })

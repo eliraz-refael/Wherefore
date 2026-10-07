@@ -81,7 +81,8 @@ function Connection({ settings, companion }: { readonly settings: SettingsValue;
   const act = useAct()
   const mode = tidyModeOf(settings)
   const choose = (next: "companion" | "api") => {
-    if (next !== mode) void act(setTidyMode(next), () => (next === "companion" ? "Tidy-ups now use Claude Code." : "Tidy-ups now use your API key."))
+    // Also when it is only the derived default: choosing it here records the choice.
+    if (next !== mode || settings.mode === undefined) void act(setTidyMode(next), () => (next === "companion" ? "Tidy-ups now use Claude Code." : "Tidy-ups now use your API key."))
   }
   return (
     <section className="wf-settings-section" aria-labelledby="settings-connection">

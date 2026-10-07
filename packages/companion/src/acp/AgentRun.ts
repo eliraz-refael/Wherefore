@@ -25,7 +25,6 @@ import {
   AgentFailed,
   type AgentPrefs,
   type AgentRunError,
-  type AgentSetting,
   type AgentUsage,
   agentFailedMessage,
   KICKOFF,
@@ -34,17 +33,23 @@ import {
   type RunId
 } from "@wherefore/core"
 import * as Fs from "node:fs/promises"
-import { Cause, Deferred, Duration, Effect, Queue, Stream } from "effect"
+import { Cause, Clock, Deferred, Duration, Effect, Queue, Stream } from "effect"
 import { type Location, pathFor, stateDir } from "../paths.ts"
 import { type AcpRequestFailed, connectAcp, type SessionConfigOption } from "./AcpConnection.ts"
 import { AgentProcesses } from "./AgentProcess.ts"
 import { agentMcpServer } from "./command.ts"
-import { classifyFailure, decidePermission, defaultModeChange, flattenSettings, type Phase } from "./policy.ts"
+import { AUTH_REQUIRED, classifyFailure, currentMode, decidePermission, flattenSettings, modePlan, type Phase } from "./policy.ts"
 
 /** How long the agent has to answer `initialize` (the first `npx` run downloads it). */
 export const START_TIMEOUT = Duration.minutes(2)
 /** How long `session/new` and each settings change may take. */
 export const SETUP_TIMEOUT = Duration.minutes(1)
+/**
+ * How long the agent may go without a sign of life (a session update, a permission request) while
+ * it works, before the run fails: a hung agent mustn't hold the profile's one run forever. The clock
+ * doesn't run while a tool call is in flight: `ask_user` waits for the user, however long they take.
+ */
+export const IDLE_TIMEOUT = Duration.minutes(10)
 
 export interface AgentRunOptions {
   readonly runId: RunId
@@ -92,12 +97,24 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
       let phase: Phase = "starting"
       let usage = zeroUsage
       let refused = 0
+      // Effect's clock (not Date.now()), so tests can drive the idle timeout with TestClock.
+      const clock = yield* Clock.clockWith(Effect.succeed)
+      const millis = () => clock.currentTimeMillisUnsafe()
+      let lastSign = millis()
+      /** The agent's tool calls that haven't completed or failed yet. */
+      const toolsInFlight = new Set<string>()
       const emit = (event: AgentEvent) => {
         Queue.offerUnsafe(queue, event)
       }
 
       const acp = yield* connectAcp(agent, {
         onUpdate: ({ update }) => {
+          lastSign = millis()
+          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+            const status = update.status ?? (update.sessionUpdate === "tool_call" ? "pending" : undefined)
+            if (status === "completed" || status === "failed") toolsInFlight.delete(update.toolCallId)
+            else if (status === "pending" || status === "in_progress") toolsInFlight.add(update.toolCallId)
+          }
           if (update.sessionUpdate === "usage_update" && update.cost !== undefined && update.cost !== null) {
             if (update.cost.currency.toUpperCase() === "USD" && Number.isFinite(update.cost.amount) && update.cost.amount >= 0) {
               usage = { ...usage, costUsd: update.cost.amount }
@@ -106,6 +123,7 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
           }
         },
         onPermission: (request) => {
+          lastSign = millis()
           const decision = decidePermission(request)
           if (!decision.allowed) refused++
           return decision.response
@@ -164,28 +182,72 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
       )
       const sessionId = session.sessionId
 
-      /** Changes one setting; returns the agent's options after it, or the old ones if it refused. */
+      /**
+       * Changes one setting; returns the agent's options after it, or the old ones if the agent
+       * refused the value (a JSON-RPC error). A timeout, a closed connection or a login error still
+       * fails the run.
+       */
       const change = (current: ReadonlyArray<SessionConfigOption>, id: string, value: string | boolean) =>
-        step(acp.setConfigOption(sessionId, id, value), { after: SETUP_TIMEOUT, what: "it didn't answer a settings change in time." }).pipe(
-          Effect.catchIf(
-            (error): error is AgentFailed => error._tag === "AgentFailed",
-            () => Effect.as(Effect.logWarning(`acp: the agent refused a value for its setting ${id}`), current)
-          )
+        step(
+          acp.setConfigOption(sessionId, id, value).pipe(
+            Effect.catchIf(
+              (error) => error.code !== undefined && error.code !== AUTH_REQUIRED,
+              () => Effect.as(Effect.logWarning(`acp: the agent refused a value for its setting ${id}`), current)
+            )
+          ),
+          { after: SETUP_TIMEOUT, what: "it didn't answer a settings change in time." }
         )
 
       let configOptions: ReadonlyArray<SessionConfigOption> = session.configOptions ?? []
-      const mode = defaultModeChange(configOptions)
-      if (mode !== undefined) configOptions = yield* change(configOptions, mode.id, mode.value)
-      for (const id of flattenSettings(configOptions).map((setting) => setting.id)) {
-        const setting: AgentSetting | undefined = flattenSettings(configOptions).find((candidate) => candidate.id === id)
-        const wanted = setting === undefined ? undefined : prefFor(setting, options.prefs)
-        if (wanted !== undefined) configOptions = yield* change(configOptions, id, wanted)
+      // The permission mode must ask for every tool, or the guard never sees them: fail closed.
+      const notDefault = (mode: string) =>
+        new AgentFailed({
+          message: agentFailedMessage(
+            command,
+            `its permission mode ("${mode}") skips permission requests, and it couldn't be set back to "default". Check the default mode in its settings.`
+          )
+        })
+      const plan = modePlan(configOptions, session.modes)
+      if (plan._tag === "Refuse") return yield* Effect.fail(notDefault(plan.mode))
+      if (plan._tag === "SetOption") {
+        configOptions = yield* step(acp.setConfigOption(sessionId, plan.id, "default"), {
+          after: SETUP_TIMEOUT,
+          what: "it didn't answer a settings change in time."
+        }).pipe(Effect.mapError((error) => (error._tag === "AgentFailed" ? notDefault(currentMode(configOptions) ?? "?") : error)))
+        // Fail closed: the agent must report the mode it is in now, and it must be "default".
+        const now = currentMode(configOptions)
+        if (now !== "default") return yield* Effect.fail(notDefault(now ?? "?"))
+      }
+      if (plan._tag === "SetMode") {
+        yield* step(acp.setMode(sessionId, "default"), { after: SETUP_TIMEOUT, what: "it didn't answer a settings change in time." }).pipe(
+          Effect.mapError((error) => (error._tag === "AgentFailed" ? notDefault(session.modes?.currentModeId ?? "?") : error))
+        )
+      }
+      // In the agent's order, re-read after every change: choosing a model can add, drop or change
+      // the efforts on offer, and a setting that appears only then gets its preference too.
+      const visited = new Set<string>()
+      for (;;) {
+        const next = flattenSettings(configOptions).find((setting) => !visited.has(setting.id))
+        if (next === undefined) break
+        visited.add(next.id)
+        const wanted = prefFor(next, options.prefs)
+        if (wanted !== undefined) configOptions = yield* change(configOptions, next.id, wanted)
       }
       emit({ _tag: "Settings", settings: flattenSettings(configOptions) })
 
       emit({ _tag: "Working" })
       phase = "working"
-      const response = yield* step(acp.prompt(sessionId, KICKOFF))
+      lastSign = millis()
+      const idle = Effect.gen(function*() {
+        while (toolsInFlight.size > 0 || millis() - lastSign < Duration.toMillis(IDLE_TIMEOUT)) {
+          if (toolsInFlight.size > 0) lastSign = millis()
+          yield* Effect.sleep(Duration.seconds(15))
+        }
+        return yield* new AgentFailed({
+          message: agentFailedMessage(command, `it stopped responding for ${Duration.toMinutes(IDLE_TIMEOUT)} minutes.`, true)
+        })
+      })
+      const response = yield* step(acp.prompt(sessionId, KICKOFF)).pipe(Effect.raceFirst(idle))
       if (response.usage !== undefined && response.usage !== null) {
         usage = {
           ...usage,

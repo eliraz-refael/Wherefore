@@ -76,7 +76,7 @@ What happens when you press Tidy up:
 
 1. The extension creates the tidy-up and shows it at once ("Starting Claude Code…").
 2. The profile's broker starts the agent command, by default
-   `npx -y @agentclientprotocol/claude-agent-acp` (Claude Code over the
+   `npx -y @agentclientprotocol/claude-agent-acp@0.81.1` (Claude Code over the
    [Agent Client Protocol](https://agentclientprotocol.com)), in an empty folder,
    `~/.wherefore/agent`. The first run downloads it, which can take a minute.
 3. The agent gets one MCP server, this CLI: `wherefore mcp --profile <this profile> --run <run id>`.
@@ -89,7 +89,9 @@ What happens when you press Tidy up:
 permission requests itself: Wherefore's tools are allowed (once), everything else (shell commands,
 file edits, web fetches, other MCP tools) is refused. Permission modes are never offered in
 Settings, and a session that starts in another mode (e.g. "bypass permissions" from your Claude
-Code settings) is put back to "default" first.
+Code settings) is put back to "default" first; if it can't be, the tidy-up doesn't start. The
+default command pins the agent's version (0.81.1), because the companion relies on its session
+options; an agent with no sign of life for 10 minutes fails the tidy-up.
 
 **Model and effort.** Settings shows them as Claude Code offers them, after the first tidy-up
 (until then: Sonnet, medium effort). Your picks apply from the next tidy-up, and only while Claude
@@ -206,7 +208,7 @@ for its program, or use an absolute path.
 
 **"Claude Code couldn't start the tidy-up: it exited with code …"** The command started but quit
 before it spoke ACP; the message ends with its last line of output. Run the command yourself
-(`npx -y @agentclientprotocol/claude-agent-acp`) to see the whole error. Behind a proxy, set
+(`npx -y @agentclientprotocol/claude-agent-acp@0.81.1`) to see the whole error. Behind a proxy, set
 `HTTPS_PROXY` before `install`, so npm can download it.
 
 **"Claude Code stopped unexpectedly"** or **"finished without saving the results".** The agent

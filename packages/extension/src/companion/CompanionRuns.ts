@@ -279,11 +279,13 @@ const make = Effect.gen(function*() {
   /** What the agent reports, into the run (and its offered settings, into Settings' store). */
   const onAgentEvent = (agent: AgentRun) => (event: AgentEvent): Effect.Effect<void, StoreError> => {
     switch (event._tag) {
-      case "Started":
+      case "Started": {
         // A custom command's agent is named by what it says it is; the default one is Claude Code.
-        return agent.command === DEFAULT_AGENT_COMMAND || event.agent === undefined
+        const name = event.agent
+        return agent.command === DEFAULT_AGENT_COMMAND || name === undefined
           ? Effect.void
-          : saveAgentRun(agent, (run) => (run.agent === event.agent ? run : { ...run, agent: event.agent! }))
+          : saveAgentRun(agent, (run) => (run.agent === name ? run : { ...run, agent: name }))
+      }
       case "Settings": {
         const model = event.settings.find((setting) => setting.category === "model")
         return Effect.andThen(
@@ -408,9 +410,16 @@ const make = Effect.gen(function*() {
         yield* store.saveRun(run)
       } else {
         agent.attachedOnce = true
-        yield* saveAgentRun(agent, (current) => mergeAgentRun(current, run))
-        // The result is in: the agent gets a moment to end its turn, then it is stopped.
-        if (run.status !== "running") {
+        let ended = false
+        // A late update can't reopen a run that already ended (failed, stopped, or done).
+        yield* saveAgentRun(agent, (current) => {
+          if (current.status !== "running") return current
+          const next = mergeAgentRun(current, run)
+          ended = next.status !== "running"
+          return next
+        })
+        // The result is in (this update ended the run): the agent gets a moment to end its turn, then it is stopped.
+        if (ended) {
           yield* Effect.forkIn(
             Effect.andThen(Effect.sleep(AFTER_RESULT_GRACE), Deferred.succeed(agent.halt, undefined)),
             layerScope

@@ -16,12 +16,24 @@
  * - `crash`: list the tabs, then exit with code 3.
  * - `login`: refuse the session with ACP's `authRequired`.
  * - `nosubmit`: list the tabs and end the turn without submitting.
+ * - `loosemode`: start in "bypassPermissions" with no "default" mode to go back to.
+ *
+ * Scenarios that never start the MCP server (for `runAgent` alone):
+ * - `slowtool`: report a tool call in flight (like `ask_user` waiting for the user), ask
+ *   permission for it (so the companion has seen the call), then wait until the file
+ *   `<FAKE_AGENT_LOG>.go` exists; complete the call and end the turn.
+ * - `silent`: say nothing after the prompt, until `session/cancel`.
+ * - `refuse`: refuse any model value with a JSON-RPC error, then end the turn.
+ * - `hangset`: never answer a model change.
+ * - `effortbymodel`: offer an effort only once a model other than "default" is chosen.
+ * - `dropmode`: answer the change back to "default" with settings that leave the mode out.
+ * Each of them ends the turn as `cancelled` on `session/cancel`.
  *
  * With `FAKE_AGENT_LOG` set, it appends what it saw and did there, one JSON object per line (the
  * session's MCP servers and `_meta`, settings changes, permission outcomes, child pids, cancels).
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process"
-import { appendFileSync } from "node:fs"
+import { appendFileSync, existsSync } from "node:fs"
 import { Readable, Writable } from "node:stream"
 import { Acp } from "../src/unstable.ts"
 
@@ -96,14 +108,16 @@ const startMcp = async (server: Acp.McpServer): Promise<Mcp> => {
   return mcp
 }
 
-const configOptions = (model: string, effort: string, mode: string): Array<Acp.SessionConfigOption> => [
+const allOptions = (model: string, effort: string, mode: string): Array<Acp.SessionConfigOption> => [
   {
     id: "mode",
     name: "Mode",
     category: "mode",
     type: "select",
     currentValue: mode,
-    options: [{ value: "default", name: "Default" }, { value: "bypassPermissions", name: "Bypass permissions" }]
+    options: scenario === "loosemode"
+      ? [{ value: "bypassPermissions", name: "Bypass permissions" }]
+      : [{ value: "default", name: "Default" }, { value: "bypassPermissions", name: "Bypass permissions" }]
   },
   {
     id: "model",
@@ -122,6 +136,16 @@ const configOptions = (model: string, effort: string, mode: string): Array<Acp.S
     options: [{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "high", name: "High" }]
   }
 ]
+
+const configOptions = (model: string, effort: string, mode: string): Array<Acp.SessionConfigOption> =>
+  allOptions(model, effort, mode).filter((option) => !(scenario === "effortbymodel" && option.id === "effort" && model === "default"))
+
+const SIMPLE = new Set(["slowtool", "silent", "refuse", "hangset", "effortbymodel", "dropmode"])
+/** Ends the prompt in progress as cancelled (`session/cancel`). */
+let cancelTurn: (() => void) | undefined
+const cancelled = new Promise<Acp.PromptResponse>((resolve) => {
+  cancelTurn = () => resolve({ stopReason: "cancelled" })
+})
 
 let connection: Acp.AgentSideConnection
 let mcpServers: Array<Acp.McpServer> = []
@@ -142,15 +166,21 @@ const agent: Acp.Agent = {
   },
   setSessionConfigOption: (params) => {
     log({ event: "set", id: params.configId, value: params.value })
+    if (scenario === "refuse" && params.configId === "model") throw Acp.RequestError.invalidParams(undefined, "no such model")
+    if (scenario === "hangset" && params.configId === "model") return new Promise<never>(() => {})
     if (params.configId in values && typeof params.value === "string") (values as Record<string, string>)[params.configId] = params.value
-    return { configOptions: configOptions(values.model, values.effort, values.mode) }
+    const options = configOptions(values.model, values.effort, values.mode)
+    if (scenario === "dropmode" && params.configId === "mode") return { configOptions: options.filter((option) => option.id !== "mode") }
+    return { configOptions: options }
   },
   cancel: () => {
     log({ event: "cancel" })
+    cancelTurn?.()
   },
   prompt: async (params) => {
     const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
     log({ event: "prompt", mentionsListTabs: text.includes("list_tabs") })
+    if (SIMPLE.has(scenario)) return Promise.race([cancelled, simpleTurn(params.sessionId)])
     const server = mcpServers[0]
     if (server === undefined) throw new Error("no MCP server")
     if (scenario === "forbidden") {
@@ -206,6 +236,31 @@ const agent: Acp.Agent = {
     })
     return { stopReason: "end_turn", usage: { totalTokens: 1500, inputTokens: 1000, outputTokens: 400, cachedReadTokens: 100 } }
   }
+}
+
+/** A turn of the scenarios that never start the MCP server. */
+const simpleTurn = async (sessionId: string): Promise<Acp.PromptResponse> => {
+  if (scenario === "silent") return new Promise<never>(() => {})
+  if (scenario === "slowtool") {
+    const toolCall = { toolCallId: "ask-1", title: "mcp__wherefore__ask_user", kind: "other" as const }
+    await connection.sessionUpdate({ sessionId, update: { sessionUpdate: "tool_call", ...toolCall, status: "pending" } })
+    await connection.sessionUpdate({ sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: toolCall.toolCallId, status: "in_progress" } })
+    // Answered after the updates before it were handled: the companion knows the call is in flight.
+    await connection.requestPermission({ sessionId, toolCall, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] })
+    log({ event: "tool_waiting" })
+    const go = `${logFile ?? ""}.go`
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        if (existsSync(go)) {
+          clearInterval(timer)
+          resolve()
+        }
+      }, 10)
+    })
+    await connection.sessionUpdate({ sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: toolCall.toolCallId, status: "completed" } })
+    log({ event: "tool_done" })
+  }
+  return { stopReason: "end_turn" }
 }
 
 log({ event: "started", scenario })

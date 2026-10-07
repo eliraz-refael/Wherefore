@@ -19,12 +19,13 @@ import {
   Run as RunSchema,
   type RunSignal
 } from "@wherefore/core"
-import { type Cause, Effect, Exit, Fiber, Queue, Schema, Scope, Stream } from "effect"
-import { NOT_PANEL_RUN_MESSAGE, STOPPED_MESSAGE, startingNote, workingNote } from "../src/companion/CompanionRuns.ts"
+import { type Cause, Clock, DateTime, Duration, Effect, Exit, Fiber, Queue, Schema, Scope, Stream } from "effect"
+import { TestClock } from "effect/testing"
+import { AFTER_RESULT_GRACE, NOT_PANEL_RUN_MESSAGE, STOPPED_MESSAGE, startingNote, workingNote } from "../src/companion/CompanionRuns.ts"
 import { WorkerClient } from "../src/messaging/WorkerClient.ts"
 import { agentOptionsKey, runKey } from "../src/store/keys.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
-import { Harness, waitUntil } from "./fakes/harness.ts"
+import { Harness, settle, waitUntil } from "./fakes/harness.ts"
 import { brokerClient, fakeAgentBroker, FakeNativeHost } from "./fakes/native.ts"
 
 const browser = () =>
@@ -114,6 +115,21 @@ const attach = (session: Effect.Success<ReturnType<typeof brokerClient>>, id: st
 
 const setup = () => new Harness(browser(), new FakeNativeHost("answer"))
 
+/** A TestClock that also counts the sleeps (timers) of `duration` started on it. */
+const countingClock = (duration: Duration.Duration) =>
+  Effect.gen(function*() {
+    const clock = yield* TestClock.make()
+    let started = 0
+    const counting: TestClock.TestClock = {
+      ...clock,
+      sleep: (slept) => {
+        if (Duration.equals(slept, duration)) started++
+        return clock.sleep(slept)
+      }
+    }
+    return { clock: counting, started: () => started }
+  })
+
 describe("ACP runs", () => {
   it.effect("Tidy up creates the run at once; the agent's MCP session attaches to it; the result shows", () => {
     const harness = setup()
@@ -156,6 +172,43 @@ describe("ACP runs", () => {
         yield* lease.close
       }))
   })
+
+  it.effect("the agent is stopped once, 30 s after the update that ended the run; repeated or late results start no more timers", () =>
+    Effect.gen(function*() {
+      const grace = yield* countingClock(AFTER_RESULT_GRACE)
+      const harness = setup()
+      yield* withAgent(harness, ({ page, session, broker }) =>
+        Effect.gen(function*() {
+          const id = yield* page.call("start_agent_run", undefined)
+          yield* waitUntil(() => broker.requests.length === 1)
+          const lease = yield* attach(session, id)
+          yield* session("update_run", { run: sessionRun(id) })
+          const before = grace.started()
+
+          // The result, then the same result again, then a late one: only the first ends the run.
+          const result = sessionRun(id, { status: "succeeded", finishedAt: "2026-10-07T09:01:00.000Z" })
+          yield* session("update_run", { run: result })
+          yield* session("update_run", { run: result })
+          yield* TestClock.adjust("10 seconds")
+          yield* session("update_run", { run: sessionRun(id, { status: "succeeded", finishedAt: "2026-10-07T09:01:10.000Z" }) })
+          const ended = stored(harness, id)
+          expect(ended?.status).toBe("succeeded")
+          expect(ended?.finishedAt === undefined ? undefined : DateTime.formatIso(ended.finishedAt)).toBe("2026-10-07T09:01:00.000Z")
+          expect(grace.started() - before).toBe(1)
+
+          // Stopped about 30 s after the result, not before, and only once.
+          yield* TestClock.adjust(Duration.toMillis(AFTER_RESULT_GRACE) - 10_000 - 1)
+          yield* settle
+          expect(broker.ended).toEqual([])
+          yield* TestClock.adjust(1)
+          yield* waitUntil(() => broker.ended.length === 1)
+          yield* TestClock.adjust("1 minute")
+          yield* settle
+          expect(broker.ended).toEqual(["interrupted"])
+          expect(stored(harness, id)?.status).toBe("succeeded")
+          yield* lease.close
+        })).pipe(Effect.provideService(Clock.Clock, grace.clock))
+    }))
 
   it.effect("sends the agent command and preferences from Settings", () => {
     const harness = setup()

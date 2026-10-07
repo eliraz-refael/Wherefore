@@ -61,7 +61,10 @@ export const isWhereforeTool = (toolCall: ToolCall): boolean => {
   return [toolCall.name, toolCall.title].some((name) => typeof name === "string" && OUR_NAMES.has(name.trim()))
 }
 
-/** The answer to a permission request: allow ours once (never "always"), refuse everything else. */
+/**
+ * The answer to a permission request: allow ours (once, or "always" only when the agent offers no
+ * once), refuse everything else.
+ */
 export const decidePermission = (
   request: RequestPermissionRequest
 ): { readonly allowed: boolean; readonly response: RequestPermissionResponse } => {
@@ -87,6 +90,8 @@ export const flattenSettings = (options: ReadonlyArray<SessionConfigOption> | nu
       ...(typeof option.description === "string" && option.description !== "" ? { description: option.description } : {})
     }
     if (option.type === "boolean") return [{ ...base, value: option.currentValue }]
+    // A kind of option this companion doesn't know: left out, rather than failing the run.
+    if (option.type !== "select" || !Array.isArray(option.options)) return []
     const choices = option.options.flatMap((choice) => ("group" in choice ? choice.options : [choice]))
     return [{
       ...base,
@@ -99,17 +104,48 @@ export const flattenSettings = (options: ReadonlyArray<SessionConfigOption> | nu
     }]
   })
 
+/** Mode ids that skip or loosen permission requests (Claude Code's bypass, auto and accept modes, Gemini's yolo, ...). */
+const LOOSE_MODE = /bypass|yolo|skip|dont.?ask|accept|auto/i
+
+/** What to do about the session's permission mode before the prompt goes out. */
+export type ModePlan =
+  /** Already asking for every tool, or a mode that doesn't loosen permissions: nothing to do. */
+  | { readonly _tag: "Keep" }
+  /** Set it to "default" (ACP config option, or the older `session/set_mode`), and check it took. */
+  | { readonly _tag: "SetOption"; readonly id: string }
+  | { readonly _tag: "SetMode" }
+  /** A loose mode with no way back to "default": the run must not start. */
+  | { readonly _tag: "Refuse"; readonly mode: string }
+
 /**
- * The permission mode to put the session in, if it isn't there: "default" (ask for every tool, so
- * the guard sees every tool), when the agent offers modes and "default" is one of them.
+ * The permission mode the session must be in: "default" (ask for every tool, so the guard sees every
+ * tool). A session that starts elsewhere is set back, through its `mode` config option or, for agents
+ * that only report the older `modes`, `session/set_mode`. A loose mode that can't be set back refuses
+ * the run (fail closed); another mode the agent offers no "default" for is kept.
  */
-export const defaultModeChange = (
-  options: ReadonlyArray<SessionConfigOption> | null | undefined
-): { readonly id: string; readonly value: string } | undefined => {
-  const mode = (options ?? []).find((option) => option.category === "mode" && option.type === "select")
-  if (mode === undefined || mode.type !== "select" || mode.currentValue === "default") return undefined
-  const offered = mode.options.flatMap((choice) => ("group" in choice ? choice.options : [choice]))
-  return offered.some((choice) => choice.value === "default") ? { id: mode.id, value: "default" } : undefined
+export const modePlan = (
+  options: ReadonlyArray<SessionConfigOption> | null | undefined,
+  modes: { readonly currentModeId: string; readonly availableModes: ReadonlyArray<{ readonly id: string }> } | null | undefined
+): ModePlan => {
+  const option = (options ?? []).find((candidate) => candidate.category === "mode")
+  if (option !== undefined) {
+    const current = String(option.currentValue)
+    if (current === "default") return { _tag: "Keep" }
+    const offered = option.type === "select"
+      ? option.options.flatMap((choice) => ("group" in choice ? choice.options : [choice])).some((choice) => choice.value === "default")
+      : false
+    if (offered) return { _tag: "SetOption", id: option.id }
+    return LOOSE_MODE.test(current) ? { _tag: "Refuse", mode: current } : { _tag: "Keep" }
+  }
+  if (modes === null || modes === undefined || modes.currentModeId === "default") return { _tag: "Keep" }
+  if (modes.availableModes.some((mode) => mode.id === "default")) return { _tag: "SetMode" }
+  return LOOSE_MODE.test(modes.currentModeId) ? { _tag: "Refuse", mode: modes.currentModeId } : { _tag: "Keep" }
+}
+
+/** The session's current permission mode, from its config options (or undefined when it reports none there). */
+export const currentMode = (options: ReadonlyArray<SessionConfigOption> | null | undefined): string | undefined => {
+  const option = (options ?? []).find((candidate) => candidate.category === "mode")
+  return option === undefined ? undefined : String(option.currentValue)
 }
 
 // ---------- failures ----------
@@ -155,7 +191,8 @@ export const classifyFailure = (facts: FailureFacts): AgentRunError => {
   }
   if (phase === "starting") {
     if (saysLogin(stderr)) return new AgentNotLoggedIn({ message: agentNotLoggedInMessage(command) })
-    if (WINDOWS_NOT_FOUND.test(stderr) || exit?.code === 127) {
+    // 127: a POSIX shell's "command not found"; 9009: cmd.exe's (its words are localized).
+    if (WINDOWS_NOT_FOUND.test(stderr) || exit?.code === 127 || exit?.code === 9009) {
       return new AgentNotFound({ command, message: agentNotFoundMessage(command) })
     }
     if (exit !== undefined) {

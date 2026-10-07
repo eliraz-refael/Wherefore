@@ -17,8 +17,12 @@ import { Schema } from "effect"
 import { RunId } from "./ids.ts"
 import { Rpc, RpcGroup } from "./unstable.ts"
 
-/** Claude Code over ACP, fetched and run by npx (the POC's default). */
-export const DEFAULT_AGENT_COMMAND = "npx -y @agentclientprotocol/claude-agent-acp"
+/**
+ * Claude Code over ACP, fetched and run by npx (the POC's default), pinned to the version whose
+ * session options the companion relies on (no built-in tools, only our MCP server; AgentRun.ts).
+ * Moving the pin is a deliberate upgrade, like the Effect pin.
+ */
+export const DEFAULT_AGENT_COMMAND = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
 
 /** `Run.agent` for runs of the default command. */
 export const CLAUDE_CODE_AGENT = "claude-code"

@@ -303,7 +303,6 @@ const make = Effect.gen(function*() {
       )
       yield* setStatus({ _tag: "Connected", profileId: id, companionVersion: greeting.companionVersion, since })
       const error = yield* Deferred.await(gone)
-      agentClient = undefined
       return { _tag: "Lost", message: describe(true, error), upFor: (yield* Clock.currentTimeMillis) - since } as const
     }))
 
