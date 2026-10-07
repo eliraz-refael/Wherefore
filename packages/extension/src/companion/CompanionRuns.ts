@@ -408,7 +408,8 @@ const make = Effect.gen(function*() {
         yield* store.saveRun(run)
       } else {
         agent.attachedOnce = true
-        yield* saveAgentRun(agent, (current) => mergeAgentRun(current, run))
+        // A late update can't reopen a run that already ended (failed, stopped, or done).
+        yield* saveAgentRun(agent, (current) => (current.status === "running" ? mergeAgentRun(current, run) : current))
         // The result is in: the agent gets a moment to end its turn, then it is stopped.
         if (run.status !== "running") {
           yield* Effect.forkIn(

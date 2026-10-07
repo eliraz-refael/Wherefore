@@ -39,12 +39,17 @@ import { type Location, pathFor, stateDir } from "../paths.ts"
 import { type AcpRequestFailed, connectAcp, type SessionConfigOption } from "./AcpConnection.ts"
 import { AgentProcesses } from "./AgentProcess.ts"
 import { agentMcpServer } from "./command.ts"
-import { classifyFailure, decidePermission, defaultModeChange, flattenSettings, type Phase } from "./policy.ts"
+import { classifyFailure, currentMode, decidePermission, flattenSettings, modePlan, type Phase } from "./policy.ts"
 
 /** How long the agent has to answer `initialize` (the first `npx` run downloads it). */
 export const START_TIMEOUT = Duration.minutes(2)
 /** How long `session/new` and each settings change may take. */
 export const SETUP_TIMEOUT = Duration.minutes(1)
+/**
+ * How long the agent may go without a sign of life (a session update, a permission request) while
+ * it works, before the run fails: a hung agent mustn't hold the profile's one run forever.
+ */
+export const IDLE_TIMEOUT = Duration.minutes(10)
 
 export interface AgentRunOptions {
   readonly runId: RunId
@@ -92,12 +97,14 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
       let phase: Phase = "starting"
       let usage = zeroUsage
       let refused = 0
+      let lastSign = Date.now()
       const emit = (event: AgentEvent) => {
         Queue.offerUnsafe(queue, event)
       }
 
       const acp = yield* connectAcp(agent, {
         onUpdate: ({ update }) => {
+          lastSign = Date.now()
           if (update.sessionUpdate === "usage_update" && update.cost !== undefined && update.cost !== null) {
             if (update.cost.currency.toUpperCase() === "USD" && Number.isFinite(update.cost.amount) && update.cost.amount >= 0) {
               usage = { ...usage, costUsd: update.cost.amount }
@@ -106,6 +113,7 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
           }
         },
         onPermission: (request) => {
+          lastSign = Date.now()
           const decision = decidePermission(request)
           if (!decision.allowed) refused++
           return decision.response
@@ -174,8 +182,29 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
         )
 
       let configOptions: ReadonlyArray<SessionConfigOption> = session.configOptions ?? []
-      const mode = defaultModeChange(configOptions)
-      if (mode !== undefined) configOptions = yield* change(configOptions, mode.id, mode.value)
+      // The permission mode must ask for every tool, or the guard never sees them: fail closed.
+      const notDefault = (mode: string) =>
+        new AgentFailed({
+          message: agentFailedMessage(
+            command,
+            `its permission mode ("${mode}") skips permission requests, and it couldn't be set back to "default". Check the default mode in its settings.`
+          )
+        })
+      const plan = modePlan(configOptions, session.modes)
+      if (plan._tag === "Refuse") return yield* Effect.fail(notDefault(plan.mode))
+      if (plan._tag === "SetOption") {
+        configOptions = yield* step(acp.setConfigOption(sessionId, plan.id, "default"), {
+          after: SETUP_TIMEOUT,
+          what: "it didn't answer a settings change in time."
+        }).pipe(Effect.mapError((error) => (error._tag === "AgentFailed" ? notDefault(currentMode(configOptions) ?? "?") : error)))
+        const now = currentMode(configOptions)
+        if (now !== undefined && now !== "default") return yield* Effect.fail(notDefault(now))
+      }
+      if (plan._tag === "SetMode") {
+        yield* step(acp.setMode(sessionId, "default"), { after: SETUP_TIMEOUT, what: "it didn't answer a settings change in time." }).pipe(
+          Effect.mapError((error) => (error._tag === "AgentFailed" ? notDefault(session.modes?.currentModeId ?? "?") : error))
+        )
+      }
       for (const id of flattenSettings(configOptions).map((setting) => setting.id)) {
         const setting: AgentSetting | undefined = flattenSettings(configOptions).find((candidate) => candidate.id === id)
         const wanted = setting === undefined ? undefined : prefFor(setting, options.prefs)
@@ -185,7 +214,14 @@ export const runAgent = (options: AgentRunOptions): Stream.Stream<AgentEvent, Ag
 
       emit({ _tag: "Working" })
       phase = "working"
-      const response = yield* step(acp.prompt(sessionId, KICKOFF))
+      lastSign = Date.now()
+      const idle = Effect.gen(function*() {
+        while (Date.now() - lastSign < Duration.toMillis(IDLE_TIMEOUT)) yield* Effect.sleep(Duration.seconds(15))
+        return yield* new AgentFailed({
+          message: agentFailedMessage(command, `it stopped responding for ${Duration.toMinutes(IDLE_TIMEOUT)} minutes.`, true)
+        })
+      })
+      const response = yield* step(acp.prompt(sessionId, KICKOFF)).pipe(Effect.raceFirst(idle))
       if (response.usage !== undefined && response.usage !== null) {
         usage = {
           ...usage,

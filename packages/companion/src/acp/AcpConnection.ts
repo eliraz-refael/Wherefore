@@ -12,8 +12,12 @@ import { Data, Duration, Effect, type Scope } from "effect"
 import { Acp } from "../unstable.ts"
 import type { AgentProcess } from "./AgentProcess.ts"
 
-/** How long a cancelled prompt gets to settle before it is abandoned (the process is ended next). */
-export const CANCEL_GRACE = Duration.seconds(2)
+/**
+ * How long a cancelled prompt gets to settle before it is abandoned (the process tree is ended
+ * next). Short: when Chrome closes the port, it kills the broker soon after, and the agent's tree
+ * must be signalled before that.
+ */
+export const CANCEL_GRACE = Duration.millis(500)
 
 /** An ACP request failed: the agent answered with an error (`code`), or the connection closed (no code). */
 export class AcpRequestFailed extends Data.TaggedError("AcpRequestFailed")<{
@@ -44,6 +48,8 @@ export interface AcpConnection {
     configId: string,
     value: string | boolean
   ) => Effect.Effect<ReadonlyArray<SessionConfigOption>, AcpRequestFailed>
+  /** The older ACP way to change the permission mode (`session/set_mode`). */
+  readonly setMode: (sessionId: string, modeId: string) => Effect.Effect<void, AcpRequestFailed>
   /** Sends the prompt and waits for the turn to end. Interrupted: `session/cancel`, then a short wait. */
   readonly prompt: (sessionId: string, text: string) => Effect.Effect<PromptResponse, AcpRequestFailed>
 }
@@ -103,6 +109,7 @@ export const connectAcp = (agent: AgentProcess, handlers: AcpHandlers): Effect.E
           connection.setSessionConfigOption(
             typeof value === "boolean" ? { sessionId, configId, type: "boolean", value } : { sessionId, configId, value }
           )).pipe(Effect.map((response) => response.configOptions)),
+      setMode: (sessionId, modeId) => request("session/set_mode", () => connection.setSessionMode({ sessionId, modeId })).pipe(Effect.asVoid),
       prompt
     } satisfies AcpConnection
   })
