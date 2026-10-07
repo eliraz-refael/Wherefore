@@ -1,16 +1,27 @@
 /**
  * Your list, the home screen (canvas v6 "Main"): open items grouped by type, each with Done and
- * Open; expand one to see its tabs (title + domain), edit its task, or remove it (with undo).
+ * Open; expand one to see its tabs (title + domain) and take any of them off it, edit its task, or
+ * remove it. Removals have undo.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { matchSavedTabs, type SavedItem, type TrackerType, trackerTypeLabel } from "@wherefore/core"
 import { DateTime } from "effect"
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
-import { editTask, markItemDone, openItem, removeItem, resetStoreKey, startTidy } from "../actions.ts"
+import {
+  type Done,
+  editTask,
+  markItemDone,
+  openItem,
+  type PanelEffect,
+  removeItem,
+  removeTab,
+  resetStoreKey,
+  startTidy
+} from "../actions.ts"
 import { itemsAtom, openTabsAtom, runsAtom, screenAtom } from "../atoms.ts"
 import { displayDomain, isWebUrl, tabCount, whenLabel } from "../format.ts"
-import { focusSoon, useAct } from "../hooks.ts"
+import { focusIdSoon, focusSoon, useAct } from "../hooks.ts"
 import { CheckIcon, GearIcon, LogoIcon, ScreenTitle, SiteBadge, StoreProblem, TabText } from "./common.tsx"
 
 export const TYPE_ORDER: ReadonlyArray<TrackerType> = ["todo", "follow_up", "read", "keep"]
@@ -196,11 +207,26 @@ function ListItem(props: {
   const detailsId = `item-${item.id}-details`
   const taskId = `item-${item.id}-task`
 
-  const leave = async (action: typeof markItemDone) => {
+  const leave = async <E,>(action: PanelEffect<Done, E>) => {
     setBusy(true)
     focusAfterLeaving(item.id)
-    const done = await act(action(item), (result) => result)
+    const done = await act(action, (result) => result)
     if (done._tag === "None") setBusy(false)
+  }
+
+  // Focus moves on to the next tab's ×, else the previous one's; the last tab takes the item with it.
+  const removeIdPrefix = `${detailsId}-remove-`
+  const dropTab = async (index: number) => {
+    const tab = item.tabs[index]
+    if (tab === undefined) return
+    if (item.tabs.length === 1) return leave(removeTab(item, tab, index))
+    setBusy(true)
+    const done = await act(removeTab(item, tab, index), (result) => result)
+    setBusy(false)
+    if (done._tag === "None") return
+    const rest = tabKeys(item.tabs.filter((_, i) => i !== index))
+    const next = rest[Math.min(index, rest.length - 1)]
+    if (next !== undefined) focusIdSoon(`${removeIdPrefix}${next}`)
   }
 
   return (
@@ -221,7 +247,7 @@ function ListItem(props: {
           type="button"
           className="wf-done-button"
           aria-label={`Done: ${item.task}`}
-          onClick={() => leave(markItemDone)}
+          onClick={() => leave(markItemDone(item))}
           disabled={busy}
         >
           <CheckIcon />
@@ -240,13 +266,13 @@ function ListItem(props: {
       {expanded
         ? (
           <div id={detailsId} className="wf-item-details">
-            <TabLinks tabs={item.tabs} />
+            <TabLinks tabs={item.tabs} remove={{ idPrefix: removeIdPrefix, busy, onRemove: dropTab }} />
             {editing
               ? <EditTask item={item} onClose={() => props.onEdit(false)} />
               : (
                 <div className="wf-item-actions">
                   <button type="button" className="wf-text-button" onClick={() => props.onEdit(true)}>Edit</button>
-                  <button type="button" className="wf-text-button" onClick={() => leave(removeItem)} disabled={busy}>
+                  <button type="button" className="wf-text-button" onClick={() => leave(removeItem(item))} disabled={busy}>
                     Remove from list
                   </button>
                 </div>
@@ -258,12 +284,38 @@ function ListItem(props: {
   )
 }
 
-/** A saved item's tabs: title and domain; web pages open in a new tab. */
-export function TabLinks({ tabs }: { readonly tabs: SavedItem["tabs"] }) {
+/**
+ * Each tab's key: its URL, and which copy of that URL it is. It stays the same when another tab is
+ * removed, so focus can move to a tab's × once the list has changed.
+ */
+const tabKeys = (tabs: SavedItem["tabs"]): ReadonlyArray<string> => {
+  const seen = new Map<string, number>()
+  return tabs.map((tab) => {
+    const copy = seen.get(tab.url) ?? 0
+    seen.set(tab.url, copy + 1)
+    return `${copy}:${tab.url}`
+  })
+}
+
+/**
+ * A saved item's tabs: title and domain; web pages open in a new tab. With `remove`, each tab has
+ * a × that takes it off the item (the archive shows tabs without one).
+ */
+export function TabLinks({ tabs, remove }: {
+  readonly tabs: SavedItem["tabs"]
+  readonly remove?: {
+    /** The ×'s element id is this plus the tab's key. */
+    readonly idPrefix: string
+    readonly busy: boolean
+    readonly onRemove: (index: number) => void
+  }
+}) {
+  const keys = tabKeys(tabs)
   return (
     <ul className="wf-tabs">
       {tabs.map((tab, index) => {
         const domain = tab.domain === "" ? displayDomain(tab.url) : tab.domain
+        const key = keys[index] ?? `${index}:${tab.url}`
         const body = (
           <>
             <SiteBadge domain={domain} />
@@ -271,10 +323,23 @@ export function TabLinks({ tabs }: { readonly tabs: SavedItem["tabs"] }) {
           </>
         )
         return (
-          <li key={`${index}:${tab.url}`}>
+          <li key={key} className={remove === undefined ? undefined : "wf-tab-row"}>
             {isWebUrl(tab.url)
               ? <a className="wf-tab" href={tab.url} target="_blank" rel="noreferrer" title="Open this tab">{body}</a>
               : <span className="wf-tab">{body}</span>}
+            {remove === undefined ? null : (
+              <button
+                type="button"
+                id={`${remove.idPrefix}${key}`}
+                className="wf-tab-remove"
+                aria-label={`Remove ${tab.title === "" ? domain : tab.title}`}
+                title="Remove from this item"
+                onClick={() => remove.onRemove(index)}
+                disabled={remove.busy}
+              >
+                ×
+              </button>
+            )}
           </li>
         )
       })}

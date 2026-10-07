@@ -597,6 +597,33 @@ a.wf-tab:hover {
   color: inherit;
 }
 
+.wf-tab-row {
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-1);
+}
+
+.wf-tab-row > .wf-tab {
+  flex: 1 1 auto;
+}
+
+.wf-tab-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--wf-radius-sm);
+  background: transparent;
+  color: var(--wf-color-fg-subtle);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.wf-tab-remove:hover:not(:disabled) {
+  background: var(--wf-color-track);
+  color: var(--wf-color-fg);
+}
+
 .wf-badge {
   flex: none;
   width: 16px;

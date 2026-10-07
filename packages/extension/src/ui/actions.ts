@@ -13,6 +13,7 @@ import {
   type Run,
   type SavedItem,
   SavedItemId,
+  type SavedTab,
   type Settings,
   type TabId,
   type UndoResult,
@@ -56,6 +57,8 @@ export const describeError = (error: unknown): string => {
       return `Chrome couldn't do that: ${message}`
     case "ItemNotFound":
       return "That item isn't on your list any more."
+    case "TabNotFound":
+      return "That tab isn't in this item any more."
     case "StoreUnreadable":
       return "Your saved data couldn't be read. Settings has a way to start fresh."
     case "UndoUnavailable":
@@ -190,6 +193,27 @@ export const removeItem = (item: SavedItem) =>
     return {
       message: `Removed “${item.task}”.`,
       undo: undoing(Effect.as(client.call("restore_item", { removed }), `“${item.task}” is back on your list.`))
+    } satisfies Done
+  })
+
+/**
+ * Removes one tab from the item (the browser tab, if open, stays as it is), with undo. Its last
+ * tab removes the item, and Undo brings the item back with it.
+ */
+export const removeTab = (item: SavedItem, tab: SavedTab, index: number) =>
+  Effect.gen(function*() {
+    const client = yield* worker
+    const removal = yield* client.call("remove_tab", { id: item.id, index, url: tab.url })
+    const title = tab.title === "" ? tab.url : tab.title
+    if (removal._tag === "ItemRemoved") {
+      return {
+        message: `Removed “${item.task}” with its last tab.`,
+        undo: undoing(Effect.as(client.call("restore_item", { removed: removal.removed }), `“${item.task}” is back on your list.`))
+      } satisfies Done
+    }
+    return {
+      message: `Removed “${title}” from “${item.task}”.`,
+      undo: undoing(Effect.as(client.call("restore_tab", { removed: removal.removed }), `“${title}” is back in “${item.task}”.`))
     } satisfies Done
   })
 
