@@ -1,8 +1,11 @@
 /**
  * The side panel: first run until there is an API key, then Your list (home), Tidy up, the Done
  * archive and Settings. One toast for outcomes and undo, in a live region.
+ *
+ * A tidy-up an agent runs through the companion (MCP) shows up by itself: the panel switches to it
+ * once, from home, so its questions are seen; and it shows even before an API key is set.
  */
-import { useAtomMount, useAtomValue } from "@effect/atom-react"
+import { useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { RunId } from "@wherefore/core"
 import { Effect } from "effect"
 import { useEffect, useRef, useState } from "react"
@@ -49,7 +52,8 @@ export function App() {
         onInitial: () => <p className="wf-muted wf-padded" role="status">Loading…</p>,
         onFailure: () => <SettingsProblem />,
         onSuccess: ({ value }) => {
-          if (value.apiKey === undefined && screen.name !== "settings") return <Onboarding />
+          // A companion run needs no API key, so its screen shows without one.
+          if (value.apiKey === undefined && screen.name !== "settings" && screen.name !== "tidy") return <Onboarding />
           switch (screen.name) {
             case "home":
               return <Home />
@@ -64,8 +68,26 @@ export function App() {
       })}
       <ToastRegion />
       <RunWatchers />
+      <FollowCompanionRuns />
     </div>
   )
+}
+
+/** Switches to a running companion run (once per run and panel) when the panel is on home. */
+function FollowCompanionRuns() {
+  const runs = useAtomValue(runsAtom)
+  const screen = useAtomValue(screenAtom)
+  const setScreen = useAtomSet(screenAtom)
+  const shown = useRef(new Set<RunId>())
+  const running = AsyncResult.isSuccess(runs)
+    ? runs.value.runs.findLast((run) => run.status === "running" && run.mode !== "api")
+    : undefined
+  useEffect(() => {
+    if (running === undefined || screen.name !== "home" || shown.current.has(running.id)) return
+    shown.current.add(running.id)
+    setScreen({ name: "tidy", runId: running.id })
+  }, [running?.id, screen.name, setScreen])
+  return null
 }
 
 function SettingsProblem() {

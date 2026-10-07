@@ -1,5 +1,5 @@
 /**
- * Which API-mode runs are actually running (architecture A4).
+ * Which runs are actually running (architecture A4).
  *
  * An API-mode run lives in the page that started it and dies with it, without a chance to record
  * that it stopped. So the page holds a Web Lock (`navigator.locks`) for as long as the run goes:
@@ -7,20 +7,19 @@
  * says "running" while its lock is free was interrupted. Extension pages and the service worker
  * share one origin, so they all see the same locks.
  *
- * Two locks per run: `wherefore/api-run` makes runs exclusive (tabs are global, so two triage runs
- * at once make no sense), and `wherefore/run/<id>` names the run, so anyone can ask whether that
- * particular run is still alive.
+ * A companion run (MCP, ACP) is held the same way, by the worker, for as long as its agent's lease
+ * is open (`CompanionRuns`): views and the interrupted-run sweep treat both kinds alike.
+ *
+ * Two locks per run: `wherefore/active-run` makes runs exclusive per profile, whatever started
+ * them (tabs are the profile's, so two triage runs at once make no sense), and `wherefore/run/<id>`
+ * names the run, so anyone can ask whether that particular run is still alive.
  */
-import { type RunId, RunId as RunIdSchema } from "@wherefore/core"
-import { Context, Effect, Layer, Schema, type Scope } from "effect"
+import { type RunId, RunAlreadyActive } from "@wherefore/core"
+import { Context, Effect, Layer, type Scope } from "effect"
 
-/** Another page is running a triage run right now. */
-export class RunAlreadyActive extends Schema.TaggedError<RunAlreadyActive>()("RunAlreadyActive", {
-  /** The live run, when known. */
-  runId: Schema.optionalKey(RunIdSchema)
-}) {}
+export { RunAlreadyActive }
 
-export const EXCLUSIVE_LOCK = "wherefore/api-run"
+export const EXCLUSIVE_LOCK = "wherefore/active-run"
 const RUN_LOCK_PREFIX = "wherefore/run/"
 export const runLockName = (id: RunId): string => `${RUN_LOCK_PREFIX}${id}`
 

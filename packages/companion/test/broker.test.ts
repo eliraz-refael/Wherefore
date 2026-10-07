@@ -24,7 +24,7 @@ describe("native host: broker", () => {
 
       const entry = yield* chrome.entry
       expect(entry).toMatchObject({ profileId: PROFILE, extensionVersion: "1.2.3", companionVersion: "9.9.9", pid: process.pid })
-      const client = yield* connectBroker(entry.socket)
+      const client = yield* connectBroker(entry.socket, entry.token)
 
       const info = yield* client.call("broker_info", undefined)
       expect(info).toMatchObject({ profileId: PROFILE, extensionVersion: "1.2.3", protocol: NATIVE_PROTOCOL_VERSION })
@@ -41,6 +41,21 @@ describe("native host: broker", () => {
         (frame as { rpc?: { tag?: string } }).rpc?.tag === "wake_and_read_pages"
       ) as { rpc: { payload: unknown } }
       expect(sent.rpc.payload).toEqual({ tab_ids: [1] })
+    }))
+
+  it.live("refuses requests without its access token, and keeps the token in its entry only", () =>
+    Effect.gen(function*() {
+      const location = yield* tempLocation
+      const chrome = yield* startFakeChrome({ location })
+      const entry = yield* chrome.entry
+      expect(entry.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      const wrong = yield* connectBroker(entry.socket, "not-the-token")
+      expect(yield* Effect.flip(wrong.call("list_tabs", {}))).toMatchObject({ _tag: "BrokerUnauthorized" })
+      expect(yield* Effect.flip(wrong.call("broker_info", undefined))).toMatchObject({ _tag: "BrokerUnauthorized" })
+      expect(chrome.workerLog).not.toContain("request list_tabs")
+      const right = yield* connectBroker(entry.socket, entry.token)
+      const info = yield* right.call("broker_info", undefined)
+      expect(JSON.stringify(info)).not.toContain(entry.token)
     }))
 
   it.live("keeps its socket and registry entry user-only", () =>
@@ -63,7 +78,7 @@ describe("native host: broker", () => {
       const location = yield* tempLocation
       const chrome = yield* startFakeChrome({ location })
       const entry = yield* chrome.entry
-      const client = yield* connectBroker(entry.socket)
+      const client = yield* connectBroker(entry.socket, entry.token)
 
       // Reading never finishes on the fake worker.
       const inFlight = yield* Effect.forkChild(client.call("read_pages", { tabIds: [TabId.make(1)] }))
@@ -90,7 +105,7 @@ describe("native host: broker", () => {
       const chrome = yield* startFakeChrome({ location })
       const entry = yield* chrome.entry
       yield* Effect.scoped(Effect.gen(function*() {
-        const client = yield* connectBroker(entry.socket)
+        const client = yield* connectBroker(entry.socket, entry.token)
         yield* Effect.forkChild(client.call("read_pages", { tabIds: [TabId.make(1)] }))
         yield* waitFor(() => chrome.workerLog.includes("request read_pages"))
       }))
@@ -99,7 +114,7 @@ describe("native host: broker", () => {
       expect(chrome.workerLog).toContain("interrupt")
 
       // The broker keeps serving other clients.
-      const again = yield* connectBroker(entry.socket)
+      const again = yield* connectBroker(entry.socket, entry.token)
       expect((yield* again.call("list_tabs", {})).tabs).toHaveLength(1)
     }))
 
@@ -163,7 +178,7 @@ describe("native host: broker", () => {
       new DataView(frame.buffer).setUint32(0, body.length, true)
       frame.set(body, 4)
       yield* chrome.write(frame)
-      const client = yield* connectBroker(entry.socket)
+      const client = yield* connectBroker(entry.socket, entry.token)
       expect((yield* client.call("list_tabs", {})).tabs).toHaveLength(1)
 
       // Not JSON at all: the channel is corrupt, so the broker shuts down cleanly.

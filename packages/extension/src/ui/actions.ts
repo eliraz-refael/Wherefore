@@ -40,6 +40,9 @@ export interface Done {
   readonly undo?: Undo
 }
 
+const runSourceOf = (error: unknown): string | undefined =>
+  typeof error === "object" && error !== null && "source" in error && typeof error.source === "string" ? error.source : undefined
+
 /** Every error a view can see, in words for the user. */
 export const describeError = (error: unknown): string => {
   const tag = typeof error === "object" && error !== null && "_tag" in error ? String(error._tag) : ""
@@ -56,7 +59,9 @@ export const describeError = (error: unknown): string => {
     case "UndoUnavailable":
       return "It's too late to undo that."
     case "RunAlreadyActive":
-      return "A tidy-up is already running in another window."
+      return runSourceOf(error) === "api" || runSourceOf(error) === undefined
+        ? "A tidy-up is already running in another window."
+        : "An agent is tidying up your tabs right now."
     case "ModelError":
       return message !== "" ? message : "The model couldn't be reached. Try again."
     default:
@@ -201,9 +206,9 @@ export const startTidy = Effect.gen(function*() {
 })
 
 export const answerAsk = (run: Run, askId: string, answers: ReadonlyArray<Answer>) =>
-  Effect.flatMap(Effect.service(Tidy), (tidy) => tidy.answer(run.id, askId, answers))
+  Effect.flatMap(Effect.service(Tidy), (tidy) => tidy.answer(run, askId, answers))
 
-export const stopRun = (run: Run) => Effect.flatMap(Effect.service(Tidy), (tidy) => tidy.cancel(run.id))
+export const stopRun = (run: Run) => Effect.flatMap(Effect.service(Tidy), (tidy) => tidy.cancel(run))
 
 export const updateChoice = (run: Run, result: ReviewResult, patch: ResultChoice) =>
   Atom.update(choicesAtom(run.id), (choices) => ({

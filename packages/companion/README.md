@@ -59,6 +59,41 @@ Brokers (one per connected Chrome profile), registered in /Users/you/.wherefore/
   k3jx...  pid 41235  extension 0.0.0  companion 0.0.0  since 10/6/2026, 9:41:02 PM
 ```
 
+## MCP mode (Claude Code)
+
+`wherefore mcp` is an MCP server on stdio. It finds every connected Chrome profile through the
+brokers, and gives an MCP client (Claude Code, or any other) Wherefore's five tools: `list_tabs`,
+`read_pages`, `wake_and_read_pages`, `ask_user` and `submit_intentions`, plus a `tidy_up` prompt.
+`install` prints the command that adds it to Claude Code, with the same pinned Node:
+
+```sh
+claude mcp add --scope user wherefore -- /path/to/node /path/to/packages/companion/dist/cli.js mcp
+```
+
+Then open the Wherefore side panel and ask Claude Code to tidy up your tabs (or run its
+`/mcp__wherefore__tidy_up` prompt). While it works:
+
+- **The side panel follows along.** The tidy-up is stored in the profile as it goes, the panel
+  switches to it, and when Claude Code submits, the panel shows the results to save and close,
+  exactly like a tidy-up started in the panel. Claude Code never closes tabs.
+- **Questions appear in the panel.** `ask_user` shows them in that profile's side panel; the first
+  answer from any open panel wins. With no panel open, Claude Code is told so (Chrome doesn't let
+  the extension open the panel by itself) and can ask you in the chat instead.
+- **Stop in the panel stops Claude Code's tidy-up** and tells it to stop.
+- **One tidy-up per profile at a time**, whoever started it: while one runs, starting another (in
+  the panel, or from a second agent) is refused with a message saying where the running one came
+  from.
+- **Several profiles.** Claude Code sees the tabs of every connected profile, with its own tab ids
+  (Chrome's can repeat across browsers). Each profile gets its own tidy-up with its own tabs. If a
+  profile's Chrome closes midway, its tabs drop out and the rest carries on. A profile that is busy
+  with another tidy-up, or whose extension doesn't answer within 10 seconds, is left out, and
+  Claude Code is told which one and why.
+  `wherefore mcp --profile <id>` (ids from `status`) serves one profile only.
+- If Claude Code exits or the profile disconnects before submitting, the tidy-up shows as
+  interrupted.
+
+Logs go to stderr (Claude Code shows them with `claude --debug`), and never include page text.
+
 ## Uninstall
 
 ```sh
@@ -73,11 +108,14 @@ when Chrome closes its connection: reload the extension or restart Chrome.
 | | |
 | --- | --- |
 | `~/.wherefore/native-host.sh` / `.bat` | What Chrome runs |
-| `~/.wherefore/run/<profile>.json` | One file per live broker: profile id, pid, socket, versions |
+| `~/.wherefore/run/<profile>.json` | One file per live broker: profile id, pid, socket, versions, access token |
 | `~/.wherefore/run/<profile>.<pid>.sock` | The broker's socket (macOS, Linux). On Windows a named pipe, `\\.\pipe\wherefore-…` |
 
-`~/.wherefore/run` is private to your user (mode 0700). Set `WHEREFORE_HOME` to use another
-directory, both when you run `install` (it is copied into the wrapper) and when you run the CLI.
+`~/.wherefore/run` is private to your user (mode 0700, entries 0600). Each broker writes a random
+access token to its entry, and refuses any request that doesn't carry it, so only your own
+processes can call it, even where the socket is visible to others (Windows named pipes). Set
+`WHEREFORE_HOME` to use another directory, both when you run `install` (it is copied into the
+wrapper) and when you run the CLI (including the `claude mcp add` line: add `-e WHEREFORE_HOME=…`).
 
 ## Troubleshooting
 
@@ -108,6 +146,10 @@ run `install` again. Chrome also prints the host's stderr in its own log when st
 **A broker is listed after Chrome closed.** Chrome normally closes the host's input, and the
 broker removes its socket and registry entry. If it was killed (Windows always kills hosts),
 the entry stays until the next `status` or broker start notices the process is gone.
+
+**Claude Code says "Open Chrome with Wherefore".** No broker is running: Chrome is closed, the
+extension isn't loaded, or the companion isn't connected (Settings → Companion). After rebuilding
+the companion, reload the extension so Chrome starts the new broker; `status` lists the live ones.
 
 **Both the POC and Wherefore companions installed?** That's fine: they use different host
 names (`com.tab_intentions.host` and `io.github.eliraz_refael.wherefore`). Only one of the two

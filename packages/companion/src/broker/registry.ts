@@ -24,12 +24,17 @@ export class RegistryError extends Schema.TaggedError<RegistryError>()("Registry
   message: Schema.String
 }) {}
 
-/** One broker, as registered: its identity plus where to reach it. */
+/**
+ * One broker, as registered: its identity, where to reach it, and the access token every request
+ * must carry (core broker.ts). The entry is user-only, so only this user's processes learn the
+ * token. Entries without one (a broker from before M2 PR B) don't decode and are pruned.
+ */
 export const RegistryEntry = Schema.Struct({
   ...BrokerInfo.fields,
   profileId: ProfileId,
   /** The Unix socket path or Windows pipe name. */
-  socket: Schema.String
+  socket: Schema.String,
+  token: Schema.NonEmptyString
 })
 export type RegistryEntry = typeof RegistryEntry.Type
 
@@ -185,7 +190,22 @@ export const makeRegistry = ({ location, isAlive, probe }: RegistryDeps) => {
     return { live, removed }
   })
 
-  return { dir, ensureDir, register, unregister, list, entryPath }
+  /**
+   * The registered brokers whose process is running, read-only: no probes, nothing removed. For
+   * callers that connect anyway (the MCP server) and treat a refused connection as a gone broker.
+   */
+  const entries: Effect.Effect<ReadonlyArray<RegistryEntry>> = Effect.gen(function*() {
+    const names = yield* Effect.promise(() => Fs.readdir(dir).catch(() => [] as Array<string>))
+    const found: Array<RegistryEntry> = []
+    for (const name of names.sort()) {
+      if (!name.endsWith(".json")) continue
+      const entry = yield* read(path.join(dir, name))
+      if (entry !== undefined && entry !== null && isAlive(entry.pid)) found.push(entry)
+    }
+    return found
+  })
+
+  return { dir, ensureDir, register, unregister, list, entries, entryPath }
 }
 
 export type Registry = ReturnType<typeof makeRegistry>

@@ -7,6 +7,9 @@
  * the run's `QuestionsInbox` and handle are in the first panel. Views pass those two requests
  * between them over a same-origin `BroadcastChannel` (`RelayChannel`): the page that owns the run
  * answers or cancels it, and the first answer still wins (`QuestionsInbox.answer`).
+ *
+ * A run the companion drives (MCP, ACP) has no owning page: its questions wait in the worker, so
+ * answers and Stop go to the worker (`answer_ask`, `stop_run`), and the first answer wins there.
  */
 import { Answer, type QuestionStep, type Run, RunId } from "@wherefore/core"
 import { Context, Deferred, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect"
@@ -67,12 +70,12 @@ export class Tidy extends Context.Service<Tidy, {
   /** Starts a run in this page. */
   readonly start: Effect.Effect<RunId, StartError>
   /**
-   * Answers an ask, in this page or the page that owns it. False when it was already answered (or
-   * withdrawn), or nobody owns it any more.
+   * Answers an ask, in this page, the page that owns it, or the worker (companion runs). False when
+   * it was already answered (or withdrawn), or nobody owns it any more.
    */
-  readonly answer: (runId: RunId, askId: string, answers: ReadonlyArray<Answer>) => Effect.Effect<boolean>
-  /** Stops a running run, in this page or the page that owns it. */
-  readonly cancel: (id: RunId) => Effect.Effect<void>
+  readonly answer: (run: Pick<Run, "id" | "mode">, askId: string, answers: ReadonlyArray<Answer>) => Effect.Effect<boolean>
+  /** Stops a running run, in this page, the page that owns it, or the worker (companion runs). */
+  readonly cancel: (run: Pick<Run, "id" | "mode">) => Effect.Effect<void>
   /** True when the run was started by this page. */
   readonly isLocal: (id: RunId) => boolean
   /**
@@ -145,14 +148,23 @@ const make = Effect.gen(function*() {
       )
     })
 
-  // The first answer wins (`QuestionsInbox.answer`), wherever it comes from.
-  const answer = (runId: RunId, askId: string, answers: ReadonlyArray<Answer>) =>
-    runs.has(runId) ? inbox.answer(askId, answers) : answerElsewhere(runId, askId, answers)
+  // The first answer wins (`QuestionsInbox.answer`, or the worker's inbox), wherever it comes from.
+  const answer = (run: Pick<Run, "id" | "mode">, askId: string, answers: ReadonlyArray<Answer>) =>
+    run.mode !== "api"
+      ? worker.call("answer_ask", { runId: run.id, askId, answers }).pipe(Effect.orElseSucceed(() => false))
+      : runs.has(run.id)
+      ? inbox.answer(askId, answers)
+      : answerElsewhere(run.id, askId, answers)
 
-  const cancel = (id: RunId) =>
+  const cancel = (run: Pick<Run, "id" | "mode">) =>
     Effect.suspend(() => {
-      const handle = runs.get(id)
-      return handle === undefined ? post({ type: "cancel", runId: id }) : handle.cancel
+      if (run.mode !== "api") {
+        return worker.call("stop_run", { id: run.id }).pipe(
+          Effect.catch((error) => Effect.logWarning(`Tidy: couldn't stop run ${run.id}: ${error.message}`))
+        )
+      }
+      const handle = runs.get(run.id)
+      return handle === undefined ? post({ type: "cancel", runId: run.id }) : handle.cancel
     })
 
   const whenGone = (id: RunId) =>

@@ -8,12 +8,19 @@ import * as Fs from "node:fs/promises"
 import * as Os from "node:os"
 import * as NodePath from "node:path"
 import {
+  type AskPanelError,
+  CompanionWorkerRpcs,
   EXTENSION_ORIGIN,
   HostToExtension,
   NATIVE_PROTOCOL_VERSION,
   type ProfileId,
+  type Question,
+  QuestionsUnavailable,
+  type Run,
+  type RunAlreadyActive,
+  RunNotActive,
+  type RunSignal,
   type RpcFromClient,
-  TabToolRpcs,
   ToolError
 } from "@wherefore/core"
 import { type Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Sink, Stdio, Stream } from "effect"
@@ -42,8 +49,22 @@ export interface FakeChromeOptions {
   readonly args?: ReadonlyArray<string>
   /** Sent as the first message; `null` sends nothing. */
   readonly hello?: unknown
+  /** The profile the extension says it is (default `PROFILE`). */
+  readonly profile?: ProfileId
   readonly listTabs?: Effect.Effect<unknown, ToolError>
+  /** What `read_pages` does; by default it never finishes. */
+  readonly readPages?: (payload: { readonly tabIds: ReadonlyArray<number> }) => Effect.Effect<unknown, ToolError>
+  /** What `ask_panel` does; by default no panel is open. */
+  readonly askPanel?: (payload: {
+    readonly runId: string
+    readonly askId: string
+    readonly questions: ReadonlyArray<Question>
+  }) => Effect.Effect<{ readonly answers: ReadonlyArray<{ readonly id: string; readonly answer: string }> }, AskPanelError>
+  /** Another run is going in this profile: `open_run` fails with this. */
+  readonly busy?: RunAlreadyActive
 }
+
+export const NO_PANEL = "The Wherefore side panel isn't open in this Chrome profile, so the user can't see the questions."
 
 export const sampleTabs = [
   { id: 1, window: 1, index: 0, title: "PR", url: "https://github.com/acme/api/pull/1", active: true }
@@ -58,6 +79,11 @@ export class FakeChrome {
   readonly host: Fiber.Fiber<void, unknown>
   private readonly stdin: Queue.Queue<Uint8Array, Cause.Done>
   readonly location: Location
+  readonly profile: ProfileId
+  /** The runs the fake worker stored (`update_run`), latest version of each. */
+  readonly runs: Map<string, Run>
+  /** Open leases (`open_run`), by run id. */
+  readonly leases: Map<string, Queue.Queue<RunSignal, Cause.Done>>
 
   constructor(fields: {
     welcomed: Deferred.Deferred<unknown>
@@ -66,6 +92,9 @@ export class FakeChrome {
     location: Location
     fromHost: Array<unknown>
     workerLog: Array<string>
+    profile: ProfileId
+    runs: Map<string, Run>
+    leases: Map<string, Queue.Queue<RunSignal, Cause.Done>>
   }) {
     this.welcomed = fields.welcomed
     this.host = fields.host
@@ -73,7 +102,21 @@ export class FakeChrome {
     this.location = fields.location
     this.fromHost = fields.fromHost
     this.workerLog = fields.workerLog
+    this.profile = fields.profile
+    this.runs = fields.runs
+    this.leases = fields.leases
   }
+
+  /** The user presses Stop in this profile's panel. */
+  readonly stop = (runId: string) =>
+    Effect.suspend(() => {
+      const lease = this.leases.get(runId)
+      if (lease === undefined) return Effect.die(new Error(`no lease for ${runId}`))
+      this.leases.delete(runId)
+      const run = this.runs.get(runId)
+      if (run !== undefined) this.runs.set(runId, { ...run, status: "cancelled", finishedAt: run.startedAt })
+      return Effect.andThen(Queue.offer(lease, { _tag: "Stopped", message: "The user stopped this tidy-up in the Wherefore side panel." }), Queue.end(lease))
+    })
 
   /** The host's `Welcome`, once it arrives. */
   readonly welcome = Effect.suspend(() => Deferred.await(this.welcomed))
@@ -86,7 +129,7 @@ export class FakeChrome {
 
   /** The broker's registry entry, once it is registered. */
   readonly entry = Effect.gen({ self: this }, function*() {
-    const file = NodePath.join(registryDir(this.location), `${PROFILE}.json`)
+    const file = NodePath.join(registryDir(this.location), `${this.profile}.json`)
     for (let i = 0; i < 300; i++) {
       const text = yield* Effect.promise(() => Fs.readFile(file, "utf8").catch(() => undefined))
       if (text !== undefined) return JSON.parse(text) as RegistryEntry
@@ -110,6 +153,9 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
     const welcomed = yield* Deferred.make<unknown>()
     const fromHost: Array<unknown> = []
     const workerLog: Array<string> = []
+    const profile = options.profile ?? PROFILE
+    const runs = new Map<string, Run>()
+    const leases = new Map<string, Queue.Queue<RunSignal, Cause.Done>>()
     const decoder = makeFrameDecoder()
     const decodeHostFrame = Schema.decodeUnknownOption(HostToExtension)
 
@@ -132,7 +178,7 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
       })
     )
 
-    // The fake service worker: an RPC server of TabToolRpcs whose one client is the native port.
+    // The fake service worker: an RPC server of CompanionWorkerRpcs whose one client is the native port.
     const protocol = yield* RpcServer.Protocol.make((writeRequest) =>
       Effect.gen(function*() {
         yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(toWorker), (message) =>
@@ -151,14 +197,45 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
         }
       })
     )
-    const handlers = TabToolRpcs.toLayer(TabToolRpcs.of({
+    const handlers = CompanionWorkerRpcs.toLayer(CompanionWorkerRpcs.of({
       list_tabs: () =>
         (options.listTabs ?? Effect.succeed({ tabs: sampleTabs })) as Effect.Effect<never, ToolError>,
-      read_pages: () =>
-        Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => workerLog.push("worker interrupted read_pages")))),
-      wake_and_read_pages: () => Effect.fail(new ToolError({ message: "asleep" }))
+      read_pages: (payload) =>
+        options.readPages !== undefined
+          ? options.readPages(payload) as Effect.Effect<never, ToolError>
+          : Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => workerLog.push("worker interrupted read_pages")))),
+      wake_and_read_pages: () => Effect.fail(new ToolError({ message: "asleep" })),
+      open_run: ({ id }) =>
+        Stream.unwrap(Effect.gen(function*() {
+          if (options.busy !== undefined) return yield* Effect.fail(options.busy)
+          const signals = yield* Queue.unbounded<RunSignal, Cause.Done>()
+          leases.set(id, signals)
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              const run = runs.get(id)
+              // Like the worker: a run still running when its lease ends was interrupted.
+              if (leases.get(id) === signals && run?.status === "running") {
+                runs.set(id, { ...run, status: "interrupted", finishedAt: run.startedAt, error: { reason: "interrupted", message: "gone" } })
+              }
+              if (leases.get(id) === signals) leases.delete(id)
+              workerLog.push(`lease ended ${id}`)
+            })
+          )
+          yield* Queue.offer(signals, { _tag: "Opened" })
+          return Stream.fromQueue(signals)
+        })),
+      update_run: ({ run }) =>
+        Effect.suspend(() => {
+          if (!leases.has(run.id)) return Effect.fail(new RunNotActive({ runId: run.id, message: "not leased" }))
+          runs.set(run.id, run)
+          return Effect.void
+        }),
+      ask_panel: (payload) =>
+        options.askPanel !== undefined
+          ? options.askPanel(payload) as Effect.Effect<never, AskPanelError>
+          : Effect.fail(new QuestionsUnavailable({ message: NO_PANEL }))
     }))
-    yield* RpcServer.make(TabToolRpcs, { disableTracing: true }).pipe(
+    yield* RpcServer.make(CompanionWorkerRpcs, { disableTracing: true }).pipe(
       Effect.provideService(RpcServer.Protocol, protocol),
       Effect.provide(handlers),
       Effect.forkScoped
@@ -181,9 +258,9 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
     )
 
     const hello = options.hello === undefined
-      ? { _tag: "Hello", protocol: NATIVE_PROTOCOL_VERSION, profileId: PROFILE, extensionVersion: "1.2.3" }
+      ? { _tag: "Hello", protocol: NATIVE_PROTOCOL_VERSION, profileId: profile, extensionVersion: "1.2.3" }
       : options.hello
     if (hello !== null) yield* Queue.offer(stdin, frameOf(hello))
 
-    return new FakeChrome({ welcomed, host, stdin, location: options.location, fromHost, workerLog })
+    return new FakeChrome({ welcomed, host, stdin, location: options.location, fromHost, workerLog, profile, runs, leases })
   })

@@ -1,7 +1,8 @@
 // No-Chrome smoke test for the bundled companion (dist/cli.js). It plays Chrome: starts
 // `native-host` over pipes with Chrome's framing, answers the broker's calls as the extension's
-// worker would, and calls the broker over its socket like an MCP server would (raw ndjson RPC).
-// Runs against a temporary WHEREFORE_HOME, so nothing real is touched.
+// worker would, calls the broker over its socket (raw ndjson RPC, with and without its access
+// token), then runs `mcp` and drives a whole tidy-up through it like an MCP client would (raw
+// JSON-RPC over stdio). Runs against a temporary WHEREFORE_HOME, so nothing real is touched.
 //
 //   pnpm -C packages/companion build && pnpm -C packages/companion smoke
 import { spawn, spawnSync } from "node:child_process"
@@ -68,18 +69,30 @@ try {
   const host = spawn(process.execPath, [cli, "native-host", ORIGIN, "--parent-window=0"], { env, stdio: ["pipe", "pipe", "pipe"] })
   host.stderr.on("data", (chunk) => (stderr += chunk))
   const fromHost = []
+  const reply = (requestId, exit) => host.stdin.write(frame({ _tag: "FromWorker", rpc: { _tag: "Exit", requestId, exit } }))
+  const runs = new Map()
   readFrames(host.stdout, (message) => {
     fromHost.push(message)
-    // The fake worker: answer list_tabs, leave read_pages hanging.
-    if (message._tag === "ToWorker" && message.rpc._tag === "Request" && message.rpc.tag === "list_tabs") {
-      host.stdin.write(frame({
-        _tag: "FromWorker",
-        rpc: {
-          _tag: "Exit",
-          requestId: message.rpc.id,
-          exit: { _tag: "Success", value: { tabs: [{ id: 7, window: 1, index: 0, title: "Smoke", url: "https://example.com/" }] } }
+    if (message._tag !== "ToWorker") return
+    const rpc = message.rpc
+    // The fake worker: list tabs, store runs, keep leases open; leave read_pages hanging.
+    if (rpc._tag === "Request" && rpc.tag === "list_tabs") {
+      reply(rpc.id, {
+        _tag: "Success",
+        value: {
+          tabs: [
+            { id: 7, window: 1, index: 0, title: "Smoke", url: "https://example.com/" },
+            { id: 8, window: 1, index: 1, title: "Sign in", url: "https://example.com/login" }
+          ]
         }
-      }))
+      })
+    } else if (rpc._tag === "Request" && rpc.tag === "open_run") {
+      host.stdin.write(frame({ _tag: "FromWorker", rpc: { _tag: "Chunk", requestId: rpc.id, values: [{ _tag: "Opened" }] } }))
+    } else if (rpc._tag === "Request" && rpc.tag === "update_run") {
+      runs.set(rpc.payload.run.id, rpc.payload.run)
+      reply(rpc.id, { _tag: "Success", value: null })
+    } else if (rpc._tag === "Interrupt") {
+      reply(rpc.requestId, { _tag: "Failure", cause: [{ _tag: "Interrupt" }] })
     }
   })
   const exited = new Promise((resolve) => host.on("exit", (code) => resolve(code)))
@@ -111,13 +124,69 @@ try {
     }
   })
   await new Promise((resolve, reject) => client.once("connect", resolve).once("error", reject))
-  const request = (id, tag, payload) => client.write(`${JSON.stringify({ _tag: "Request", id, tag, payload, headers: [] })}\n`)
+  const request = (id, tag, payload, token = entry.token) =>
+    client.write(`${JSON.stringify({ _tag: "Request", id, tag, payload, headers: token === null ? [] : [["x-wherefore-token", token]] })}\n`)
+  request("0", "list_tabs", {}, null)
+  await until(() => replies.some((reply) => reply.requestId === "0"), "the refusal without a token")
+  const refusedCall = replies.find((reply) => reply.requestId === "0")
+  check(JSON.stringify(refusedCall.exit).includes("BrokerUnauthorized"), "a request without the broker's token is refused")
+  check(typeof entry.token === "string" && entry.token.length >= 43, "the registry entry carries the access token")
   request("1", "list_tabs", {})
   await until(() => replies.some((reply) => reply.requestId === "1"), "the list_tabs reply")
   const listed = replies.find((reply) => reply.requestId === "1")
   check(listed._tag === "Exit" && listed.exit._tag === "Success" && listed.exit.value.tabs[0].id === 7, "list_tabs forwarded to the worker and back")
 
-  // 5. A call in flight when Chrome closes the port fails with ExtensionUnavailable, then the host cleans up.
+  // 5. MCP mode: `mcp` finds the broker in the registry and runs a tidy-up through it.
+  const mcp = spawn(process.execPath, [cli, "mcp"], { env, stdio: ["pipe", "pipe", "pipe"] })
+  mcp.stderr.on("data", (chunk) => (stderr += chunk))
+  const mcpExited = new Promise((resolve) => mcp.on("exit", (code) => resolve(code)))
+  const answers = new Map()
+  let mcpBuffer = ""
+  mcp.stdout.on("data", (chunk) => {
+    mcpBuffer += chunk
+    let newline
+    while ((newline = mcpBuffer.indexOf("\n")) >= 0) {
+      const line = mcpBuffer.slice(0, newline)
+      mcpBuffer = mcpBuffer.slice(newline + 1)
+      if (line.trim() !== "") {
+        const message = JSON.parse(line)
+        answers.set(message.id, message)
+      }
+    }
+  })
+  let nextId = 1
+  const rpcCall = async (method, params = {}) => {
+    const id = nextId++
+    mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
+    await until(() => answers.has(id), method)
+    return answers.get(id)
+  }
+  const initialized = await rpcCall("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0" } })
+  check(initialized.result?.serverInfo?.name === "wherefore" && initialized.result.instructions.includes("list_tabs"), "mcp: initialize, with instructions")
+  mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+  const toolNames = (await rpcCall("tools/list")).result.tools.map((tool) => tool.name).join(",")
+  check(toolNames === "list_tabs,read_pages,wake_and_read_pages,ask_user,submit_intentions", `mcp: tools ${toolNames}`)
+  check((await rpcCall("prompts/list")).result.prompts.some((prompt) => prompt.name === "tidy_up"), "mcp: the tidy_up prompt")
+  const tool = async (name, args = {}) => (await rpcCall("tools/call", { name, arguments: args })).result
+  const listedTabs = (await tool("list_tabs")).structuredContent?.tabs ?? []
+  check(listedTabs.length === 2 && listedTabs.every((tab) => tab.id !== 7 && tab.id !== 8), "mcp: list_tabs through the broker, with session ids")
+  const [smokeTab, loginTab] = listedTabs.map((tab) => tab.id)
+  const intention = (title, ids, kind) => ({ title, why: "w", kind, tab_ids: ids, confidence: "high", evidence: "e" })
+  const rejected = await tool("submit_intentions", { intentions: [intention("Smoke", [smokeTab], "read")] })
+  check(rejected.isError === true && JSON.stringify(rejected).includes("Missing tab ids"), "mcp: a submission missing a tab goes back to the model")
+  const saved = await tool("submit_intentions", { intentions: [intention("Smoke", [smokeTab], "read"), intention("Login", [loginTab], "dead")] })
+  check(saved.isError === false && saved.structuredContent.message.startsWith("Saved 2 groups"), "mcp: the full submission is saved")
+  const [run] = [...runs.values()]
+  check(
+    runs.size === 1 && run.mode === "mcp" && run.agent === "smoke" && run.status === "succeeded" &&
+      run.intentions.map((item) => item.tabIds).join("|") === "7|8",
+    "mcp: the worker stored one mcp run, its result in Chrome's own tab ids"
+  )
+  mcp.stdin.end()
+  const mcpCode = await mcpExited
+  check(mcpCode === 0, `mcp: exits ${mcpCode} when the client closes stdin`)
+
+  // 6. A call in flight when Chrome closes the port fails with ExtensionUnavailable, then the host cleans up.
   request("2", "read_pages", { tab_ids: [7] })
   await until(() => fromHost.some((message) => message.rpc?.tag === "read_pages"), "read_pages to reach the worker")
   check(fromHost.find((message) => message.rpc?.tag === "read_pages").rpc.payload.tab_ids[0] === 7, "read_pages keeps the model's wire form (tab_ids)")
@@ -130,7 +199,7 @@ try {
   check(!existsSync(entryFile) && !existsSync(entry.socket), "the registry entry and socket are gone")
   client.destroy()
 
-  // 6. A signal (Chrome sends SIGTERM when it gives up on a host) also cleans up. POSIX only:
+  // 7. A signal (Chrome sends SIGTERM when it gives up on a host) also cleans up. POSIX only:
   //    Windows terminates hosts outright, and the next broker or `status` prunes the entry.
   if (process.platform !== "win32") {
     const second = spawn(process.execPath, [cli, "native-host", ORIGIN], { env, stdio: ["pipe", "pipe", "pipe"] })

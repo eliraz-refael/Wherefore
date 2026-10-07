@@ -4,10 +4,11 @@
  * with Chrome's own error message, and the extension's `disconnect()` doesn't fire its own
  * `onDisconnect`.
  */
-import { NATIVE_PROTOCOL_VERSION } from "@wherefore/core"
-import { Effect, Layer } from "effect"
+import { CompanionWorkerRpcs, NATIVE_PROTOCOL_VERSION } from "@wherefore/core"
+import { Effect, Layer, Queue, type Scope } from "effect"
 import { FORBIDDEN, NOT_FOUND } from "../../src/companion/CompanionLink.ts"
 import { NativeConnector, type NativePort } from "../../src/companion/NativeConnector.ts"
+import { RpcClient, type RpcMessage, RpcSerialization } from "../../src/unstable.ts"
 
 /** How the host behaves on a new connection. */
 export type HostMode =
@@ -117,3 +118,34 @@ export class FakeNativeHost {
     return Layer.succeed(NativeConnector)(this.connector)
   }
 }
+
+/**
+ * The broker's end of a connection: a real RPC client of the worker's `CompanionWorkerRpcs`, as
+ * the companion's `WorkerLink` is. Closing the scope interrupts its calls, like a broker whose
+ * socket client hung up.
+ */
+export const brokerClient = (connection: HostConnection) =>
+  Effect.gen(function*() {
+    const replies = yield* Queue.unbounded<RpcMessage.FromServerEncoded>()
+    const previous = connection.onReceive
+    connection.onReceive = (message) => {
+      previous(message)
+      const frame = message as { readonly _tag?: unknown; readonly rpc?: unknown }
+      if (frame._tag === "FromWorker") Queue.offerUnsafe(replies, frame.rpc as RpcMessage.FromServerEncoded)
+    }
+    const protocol = yield* RpcClient.Protocol.make((writeResponse, clientIds) =>
+      Effect.gen(function*() {
+        yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(replies), (reply) =>
+          Effect.forEach(clientIds, (clientId) => writeResponse(clientId, reply), { discard: true }))))
+        return {
+          send: (_clientId, request) => Effect.sync(() => connection.send({ _tag: "ToWorker", rpc: request })),
+          supportsAck: true,
+          supportsTransferables: false,
+          codecFor: RpcSerialization.json.codecFor
+        }
+      })
+    )
+    return yield* RpcClient.make(CompanionWorkerRpcs, { flatten: true, disableTracing: true }).pipe(
+      Effect.provideService(RpcClient.Protocol, protocol)
+    )
+  }) satisfies Effect.Effect<unknown, never, Scope.Scope>

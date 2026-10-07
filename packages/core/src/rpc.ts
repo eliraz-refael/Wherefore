@@ -8,16 +8,22 @@
  *   companion can forward an MCP tool call to the worker without translating it.
  * - `TabRpcs`: closing with undo, and resuming an item as a tab group. Used by the UI only.
  * - `StoreRpcs`: every write to the user's items and settings.
- * - `RunRpcs`: persisting triage runs step by step, and marking runs whose page went away.
+ * - `RunRpcs`: persisting triage runs step by step, marking runs whose page went away, and
+ *   answering or stopping a run the companion drives.
  * - `CompanionRpcs`: the state of the worker's link to the companion.
  *
  * `ask_user` and `submit_intentions` are not here: they are answered where the run lives (the page
- * in API mode), not in the worker.
+ * in API mode, the companion's MCP server in MCP mode), not in the worker.
+ *
+ * `CompanionWorkerRpcs` is what the worker serves the companion's broker on the native port: the
+ * tool RPCs plus `CompanionRunRpcs`, through which an MCP (or ACP) run is stored step by step in
+ * this profile and asks its questions in this profile's side panel.
  */
 import { Schema } from "effect"
 import { CompanionStatus } from "./companion.ts"
 import { RunId, SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
-import { Run } from "./run.ts"
+import { Answer, Question } from "./intention.ts"
+import { CompanionRunMode, Run, RunMode } from "./run.ts"
 import { RemovedItem, SavedItem } from "./savedItem.ts"
 import { Settings } from "./settings.ts"
 import { ListTabs, ReadPages, ToolError, WakeAndReadPages } from "./tools.ts"
@@ -50,6 +56,30 @@ export class StoreUnreadable extends Schema.TaggedError<StoreUnreadable>()("Stor
 /** No saved item has this id. */
 export class ItemNotFound extends Schema.TaggedError<ItemNotFound>()("ItemNotFound", {
   id: SavedItemId
+}) {}
+
+/**
+ * Another triage run is going in this Chrome profile: runs are exclusive per profile, whatever
+ * started them (tabs are the profile's, so two triages at once would only double the work). `runId`
+ * and `source` say which run, when known.
+ */
+export class RunAlreadyActive extends Schema.TaggedError<RunAlreadyActive>()("RunAlreadyActive", {
+  runId: Schema.optionalKey(RunId),
+  source: Schema.optionalKey(RunMode)
+}) {}
+
+/**
+ * A companion run's update or question arrived after the run ended in the extension (the user
+ * stopped it, or it was never opened on this connection). The run's owner should stop.
+ */
+export class RunNotActive extends Schema.TaggedError<RunNotActive>()("RunNotActive", {
+  runId: RunId,
+  message: Schema.String
+}) {}
+
+/** Nobody can answer a question right now: no side panel is open, or it closed before an answer. */
+export class QuestionsUnavailable extends Schema.TaggedError<QuestionsUnavailable>()("QuestionsUnavailable", {
+  message: Schema.String
 }) {}
 
 const StoreError = Schema.Union([StoreUnreadable, BrowserError])
@@ -183,7 +213,21 @@ export const RunRpcs = RpcGroup.make(
    * Records that the user finished reviewing a run's result (`reviewed: true`), or undoes that.
    * A run that is no longer stored is ignored.
    */
-  Rpc.make("set_run_reviewed", { payload: { id: RunId, reviewed: Schema.Boolean }, error: StoreError })
+  Rpc.make("set_run_reviewed", { payload: { id: RunId, reviewed: Schema.Boolean }, error: StoreError }),
+  /**
+   * Answers a question a companion run (MCP, ACP) asked in this profile's panels. The first answer
+   * wins: false when the ask is already answered or withdrawn, or isn't a companion run's. API-mode
+   * runs are answered in the page running them.
+   */
+  Rpc.make("answer_ask", {
+    payload: { runId: RunId, askId: Schema.String, answers: Schema.Array(Answer) },
+    success: Schema.Boolean
+  }),
+  /**
+   * Stops a companion run (MCP, ACP): it is stored as cancelled at once and its agent is told. A run
+   * that isn't the companion's, or isn't running, is left alone.
+   */
+  Rpc.make("stop_run", { payload: { id: RunId }, error: StoreError })
 )
 
 // ---------- the companion ----------
@@ -200,3 +244,64 @@ export const CompanionRpcs = RpcGroup.make(
 
 /** Everything the worker serves to extension pages. */
 export const WorkerRpcs = TabToolRpcs.merge(TabRpcs, StoreRpcs, RunRpcs, CompanionRpcs)
+
+// ---------- runs the companion drives (on the native port) ----------
+
+/**
+ * What a companion run's lease (`open_run`) tells its owner: `Opened` once the run is its own (the
+ * first element), `Stopped` when the user stopped it from a panel (the last).
+ */
+export const RunSignal = Schema.Union([
+  Schema.TaggedStruct("Opened", {}),
+  Schema.TaggedStruct("Stopped", { message: Schema.String })
+])
+export type RunSignal = typeof RunSignal.Type
+
+export const OpenRunError = Schema.Union([RunAlreadyActive, StoreUnreadable, BrowserError])
+export type OpenRunError = typeof OpenRunError.Type
+
+/**
+ * Leases a run for the companion: while this stream is open, run `id` is the profile's one active
+ * run, owned by the caller. The worker holds the run's Web Locks for it (architecture A4), so an
+ * API-mode run can't start meanwhile, and views see the run as alive. Nothing is stored until the
+ * first `update_run`.
+ *
+ * The stream emits `Opened`, then nothing until the user stops the run (`Stopped`, then it ends).
+ * When the caller goes away (the stream is interrupted: its MCP client or broker disconnected, or
+ * Chrome closed the native port), a run still stored as running is marked interrupted.
+ */
+export const OpenRunRpc = Rpc.make("open_run", {
+  payload: { id: RunId, mode: CompanionRunMode },
+  success: RunSignal,
+  error: OpenRunError,
+  stream: true
+})
+
+export const UpdateRunError = Schema.Union([RunNotActive, StoreUnreadable, BrowserError])
+export type UpdateRunError = typeof UpdateRunError.Type
+
+/** Stores a leased run as it is now (idempotent), like the page's `save_run`. */
+export const UpdateRunRpc = Rpc.make("update_run", {
+  payload: { run: Run },
+  error: UpdateRunError
+})
+
+export const AskPanelError = Schema.Union([QuestionsUnavailable, RunNotActive])
+export type AskPanelError = typeof AskPanelError.Type
+
+/**
+ * Shows a leased run's questions in this profile's side panel(s) and waits for the answers; the
+ * first panel to answer wins (`answer_ask`). The caller records the question step first, so the
+ * panel can show it. Fails at once with `QuestionsUnavailable` when no panel is open, and later if
+ * every panel closes before an answer. Interrupting it withdraws the questions.
+ */
+export const AskPanelRpc = Rpc.make("ask_panel", {
+  payload: { runId: RunId, askId: Schema.String, questions: Schema.Array(Question) },
+  success: Schema.Struct({ answers: Schema.Array(Answer) }),
+  error: AskPanelError
+})
+
+export const CompanionRunRpcs = RpcGroup.make(OpenRunRpc, UpdateRunRpc, AskPanelRpc)
+
+/** What the worker serves the companion's broker on the native port. */
+export const CompanionWorkerRpcs = TabToolRpcs.merge(CompanionRunRpcs)

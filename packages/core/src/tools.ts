@@ -41,7 +41,13 @@ const PageReads = Schema.Struct({ pages: Schema.Array(PageRead) })
 export const ListTabs = Tool.make("list_tabs", {
   description:
     "List every open tab: id, window, title, redacted URL, group, asleep, last used, opener, duplicates. Call this first.",
-  success: Schema.Struct({ tabs: Schema.Array(TabSnapshot) }),
+  success: Schema.Struct({
+    tabs: Schema.Array(TabSnapshot),
+    /** MCP mode only: a Chrome profile skipped (busy with another tidy-up, or not answering). */
+    notice: Schema.optionalKey(Schema.String.annotate({
+      description: "Set when some tabs couldn't be listed, e.g. a Chrome profile was busy; explains which and why."
+    }))
+  }),
   failure: ToolError,
   failureMode: "return"
 })

@@ -86,6 +86,10 @@
             ],
             "additionalProperties": true
           }
+        },
+        "notice": {
+          "type": "string",
+          "description": "Set when some tabs couldn't be listed, e.g. a Chrome profile was busy; explains which and why."
         }
       },
       "required": [

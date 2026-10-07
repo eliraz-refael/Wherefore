@@ -9,6 +9,18 @@ export const plural = (n: number, one: string, many = `${one}s`): string => `${n
 
 export const tabCount = (n: number): string => plural(n, "tab")
 
+const KNOWN_AGENTS: Readonly<Record<string, string>> = { "claude-code": "Claude Code", "claude-ai": "Claude" }
+
+/**
+ * Who runs a companion run, for display: a known agent's name, the name the agent gave (an MCP
+ * client's `clientInfo`, at most 40 characters), or "An agent".
+ */
+export const agentName = (agent: string | undefined): string => {
+  const name = agent?.trim() ?? ""
+  if (name === "") return "An agent"
+  return KNOWN_AGENTS[name.toLowerCase()] ?? (name.length > 40 ? `${name.slice(0, 39)}…` : name)
+}
+
 const DAY_MS = 86_400_000
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const

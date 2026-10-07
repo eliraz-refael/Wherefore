@@ -370,7 +370,7 @@ describe("TriageAgent", () => {
       let release: () => void = () => {}
       yield* Effect.promise(() =>
         new Promise<void>((started) => {
-          void other.request("wherefore/api-run", {}, () =>
+          void other.request("wherefore/active-run", {}, () =>
             new Promise<void>((resolve) => {
               release = resolve
               started()

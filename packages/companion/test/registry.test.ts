@@ -26,7 +26,8 @@ const entryFor = (location: Location, profileId: ProfileId, pid: number): Regist
   protocol: NATIVE_PROTOCOL_VERSION,
   pid,
   startedAt: 0,
-  socket: socketPath(location, profileId, pid)
+  socket: socketPath(location, profileId, pid),
+  token: "test-token"
 })
 
 const exists = (path: string) => Effect.promise(() => Fs.stat(path).then(() => true, () => false))
