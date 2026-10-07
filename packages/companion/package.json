@@ -15,9 +15,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.0",
     "@effect/platform-node-shared": "4.0.0-rc.117",
     "@wherefore/core": "workspace:*",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0-rc.117",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.116",
