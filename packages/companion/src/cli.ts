@@ -16,7 +16,7 @@
 import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME, ProfileId } from "@wherefore/core"
-import { Cause, Console, Duration, Effect, Exit, Layer, Logger, Option, Runtime, Schema } from "effect"
+import { Cause, Console, Data, Duration, Effect, Exit, Layer, Logger, Option, Runtime, Schema } from "effect"
 import { connectBroker } from "./broker/BrokerClient.ts"
 import { callerOf, runNativeHost } from "./broker/nativeHost.ts"
 import { liveDeps, makeRegistry } from "./broker/registry.ts"
@@ -52,6 +52,11 @@ const nodePath = (where: Location) =>
   })
 
 const pad = (text: string, width: number) => text.padEnd(width)
+
+/** A bad command line, already explained on stderr: the process exits 1 without a stack trace. */
+class UsageError extends Data.TaggedError("UsageError")<{ readonly message: string }> {
+  override readonly [Runtime.errorReported] = false
+}
 
 const install = Command.make("install", {}, () =>
   Effect.gen(function*() {
@@ -147,7 +152,9 @@ const mcp = Command.make("mcp", {
     console.warn = console.error
     const scoped = Option.getOrUndefined(profile)
     if (scoped !== undefined && !Schema.is(ProfileId)(scoped)) {
-      return yield* Console.error(`wherefore mcp: "${scoped}" isn't a profile id; \`status\` lists them.`)
+      const message = `wherefore mcp: "${scoped}" isn't a profile id; \`status\` lists them.`
+      yield* Console.error(message)
+      return yield* new UsageError({ message })
     }
     yield* serveMcp({
       version: COMPANION_VERSION,

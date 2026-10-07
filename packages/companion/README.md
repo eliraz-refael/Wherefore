@@ -85,7 +85,9 @@ Then open the Wherefore side panel and ask Claude Code to tidy up your tabs (or 
   from.
 - **Several profiles.** Claude Code sees the tabs of every connected profile, with its own tab ids
   (Chrome's can repeat across browsers). Each profile gets its own tidy-up with its own tabs. If a
-  profile's Chrome closes midway, its tabs drop out and the rest carries on.
+  profile's Chrome closes midway, its tabs drop out and the rest carries on. A profile that is busy
+  with another tidy-up, or whose extension doesn't answer within 10 seconds, is left out, and
+  Claude Code is told which one and why.
   `wherefore mcp --profile <id>` (ids from `status`) serves one profile only.
 - If Claude Code exits or the profile disconnects before submitting, the tidy-up shows as
   interrupted.

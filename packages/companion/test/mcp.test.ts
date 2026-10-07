@@ -9,7 +9,7 @@ import { Deferred, Effect } from "effect"
 import { INSTRUCTIONS, PROMPT_NAME } from "../src/mcp/McpSurface.ts"
 import { ASK_ELSEWHERE, NO_BROKERS, PROFILE_GONE, SKIPPED_ANSWER, UNKNOWN_TAB } from "../src/mcp/Session.ts"
 import { type FakeChrome, NO_PANEL, startFakeChrome, tempLocation } from "./fakes.ts"
-import { eventually, startMcp } from "./mcpProcess.ts"
+import { eventually, runCli, startMcp } from "./mcpProcess.ts"
 
 const WORK = "workworkworkworkworkworkwo" as ProfileId
 const HOME = "homehomehomehomehomehomeho" as ProfileId
@@ -290,6 +290,24 @@ describe("wherefore mcp", () => {
       expect(result.isError).toBe(true)
       expect(result.text).toContain("Another tidy-up is already running in this Chrome profile (started from the Wherefore side panel)")
       expect(work.runs.size).toBe(0)
+
+      // With another profile free, list_tabs lists that one and says which was left out.
+      const home = yield* startFakeChrome({ location, profile: HOME, listTabs: Effect.succeed({ tabs: tabsOf("home") }) })
+      yield* home.entry
+      const listed = yield* Effect.promise(() => mcp.callTool("list_tabs"))
+      expect(listed.isError).toBe(false)
+      expect(listed.structured.tabs.map((tab: any) => tab.title)).toEqual(["home PR", "home docs"])
+      expect(listed.structured.notice).toContain(WORK)
+      expect(listed.structured.notice).toContain("started from the Wherefore side panel")
+    }))
+
+  it.live("--profile with something that isn't a profile id fails with a non-zero exit", () =>
+    Effect.gen(function*() {
+      const location = yield* tempLocation
+      const { code, stderr } = yield* runCli(homeOf(location), ["mcp", "--profile", "bad"])
+      expect(stderr).toContain(`"bad" isn't a profile id`)
+      expect(code).not.toBe(0)
+      expect(code).not.toBeNull()
     }))
 
   it.live("--profile serves one profile only", () =>

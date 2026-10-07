@@ -8,12 +8,15 @@
  *   per profile it touches (`mode: "mcp"`), stored in that profile's Store by its worker: the run is
  *   leased (`open_run`) when the profile first takes part, and stored whole after every step
  *   (`update_run`), like an API-mode run. A profile listed for the first time mid-triage joins it.
+ * - **Profiles are each on their own.** A profile that can't take part (another tidy-up runs there,
+ *   or its broker doesn't open the run within `OPEN_RUN_TIMEOUT`) is left out of the call, and the
+ *   model is told which and why; a call fails only when no profile it needs could take part.
  * - **Coverage** is checked against every tab the triage's runs listed. A profile that disconnects
  *   leaves the triage; its tabs drop out of the check, and its run is marked interrupted by its
  *   worker (or that worker's next start).
  * - **Questions** go to the panels of the profile that owns the question's first tab.
- * - **Stop** in any profile's panel stops the whole triage: the call in flight (or, if none, the
- *   next call) tells the model.
+ * - **Stop** in any profile's panel stops the whole triage: a call in flight tells the model, or, if
+ *   none does (none was in flight, or each ended another way), the next call does.
  */
 import {
   type Answer,
@@ -32,6 +35,7 @@ import {
   RunId,
   type RunMode,
   type RunStep,
+  STOPPED_STEP,
   type SubmittedIntention,
   type TabId,
   type TabSnapshot,
@@ -39,9 +43,12 @@ import {
   UNKNOWN_MODEL
 } from "@wherefore/core"
 import { randomUUID } from "node:crypto"
-import { Cause, DateTime, Deferred, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Deferred, Duration, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
 import type { Broker, Brokers } from "./Brokers.ts"
 import { SessionIds } from "./ids.ts"
+
+/** How long a profile's broker has to open a run (`open_run`'s `Opened`) before the profile is skipped. */
+export const OPEN_RUN_TIMEOUT = Duration.seconds(10)
 
 // ---------- what the model hears ----------
 
@@ -50,6 +57,9 @@ export const NO_BROKERS =
 export const NO_SCOPED_BROKER =
   "Open Chrome with Wherefore: the Chrome profile this session is for isn't connected to the companion right now."
 export const PROFILE_GONE = "This tab's Chrome profile disconnected (Chrome closed, or the extension reloaded)."
+export const NOT_ANSWERING = `This Chrome profile's Wherefore extension didn't answer within ${
+  Duration.toSeconds(OPEN_RUN_TIMEOUT)
+} seconds, so it couldn't start a tidy-up there.`
 export const UNKNOWN_TAB = "Unknown tab id: call list_tabs first."
 export const NEED_LIST = "Call list_tabs first: this tidy-up has no tab list to check the intentions against."
 export const ASK_ELSEWHERE =
@@ -65,6 +75,10 @@ const SOURCES: Readonly<Record<RunMode, string>> = {
 
 export const runActiveMessage = (source: RunMode | undefined) =>
   `Another tidy-up is already running in this Chrome profile${source === undefined ? "" : ` (started ${SOURCES[source]})`}. Wait for it to finish, or stop it in the Wherefore side panel, then try again.`
+
+/** list_tabs' `notice`: the profiles left out, and why. */
+export const skippedNotice = (skipped: ReadonlyMap<ProfileId, string>) =>
+  [...skipped].map(([profile, why]) => `The tabs of Chrome profile ${profile} aren't listed: ${why}`).join(" ")
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 const shorten = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
@@ -83,7 +97,9 @@ export interface SessionOptions {
 }
 
 export interface Session {
-  readonly listTabs: (ctx: CallContext) => Effect.Effect<{ readonly tabs: ReadonlyArray<TabSnapshot> }, ToolError>
+  readonly listTabs: (
+    ctx: CallContext
+  ) => Effect.Effect<{ readonly tabs: ReadonlyArray<TabSnapshot>; readonly notice?: string }, ToolError>
   readonly readPages: (
     params: { readonly tabIds: ReadonlyArray<TabId>; readonly maxChars?: number },
     wake: boolean,
@@ -110,12 +126,29 @@ interface ProfileRun {
 
 interface Triage {
   readonly runs: Map<ProfileId, ProfileRun>
+  /** Runs being opened: a second call for the same profile waits for the same `open_run`. */
+  readonly opening: Map<ProfileId, Deferred.Deferred<ProfileRun, string>>
   /** Profiles that disconnected mid-triage: their tabs drop out of the coverage check. */
   readonly gone: Set<ProfileId>
   /** Completes with the model's message when the user stops the triage. */
   readonly stopped: Deferred.Deferred<string>
+  /** The stop's message, once stopped. */
+  stopMessage: string | undefined
+  /** Tool calls counted in this triage that haven't ended yet. */
   inFlight: number
+  /** A call has told the model about the stop. */
+  heard: boolean
 }
+
+const newTriage = (): Triage => ({
+  runs: new Map(),
+  opening: new Map(),
+  gone: new Set(),
+  stopped: Deferred.makeUnsafe(),
+  stopMessage: undefined,
+  inFlight: 0,
+  heard: false
+})
 
 /** A broker call failed because the profile is gone (as opposed to a failure to report). */
 const isGone = (error: { readonly _tag: string }) => error._tag === "ExtensionUnavailable" || error._tag === "BrokerUnreachable"
@@ -128,8 +161,8 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
     const ids = new SessionIds()
     const lock = Semaphore.makeUnsafe(1)
     let triage: Triage | undefined
-    /** A stop no call was there to hear: the next call reports it. */
-    let notice: string | undefined
+    /** The last stopped triage, until a call has told the model about its stop. */
+    let unheard: Triage | undefined
     let firstRunId = options.firstRunId
     let nextAsk = 1
     let nextStep = 1
@@ -179,7 +212,7 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
         return yield* body.pipe(Effect.onExit((exit) => {
           if (Exit.isSuccess(exit)) return finish("ok", done(exit.value))
           const error = Cause.findErrorOption(exit.cause)
-          return finish("error", error._tag === "Some" ? failed(error.value) : "Stopped")
+          return finish("error", error._tag === "Some" ? failed(error.value) : STOPPED_STEP)
         }))
       })
 
@@ -191,7 +224,9 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
         if (triage !== stopped) return
         triage = undefined
         const said = `${message} ${STOP_GUIDANCE}`
-        if (stopped.inFlight === 0) notice = said
+        // Told by a call in flight, or else by the next call (inTriage).
+        stopped.stopMessage = said
+        unheard = stopped
         yield* Deferred.succeed(stopped.stopped, said)
         const now = yield* DateTime.now
         for (const part of stopped.runs.values()) {
@@ -264,7 +299,9 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
           }),
           Effect.forkIn(lease)
         )
+        // A broker that takes the lease and never answers costs the call OPEN_RUN_TIMEOUT, no more.
         yield* Deferred.await(opened).pipe(
+          Effect.timeoutOrElse({ duration: OPEN_RUN_TIMEOUT, orElse: () => Effect.fail(NOT_ANSWERING) }),
           Effect.mapError((message) => new ToolError({ message })),
           Effect.onError(() => Scope.close(lease, Exit.void))
         )
@@ -273,49 +310,119 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
       })
 
     /**
-     * The current triage (started now if there is none), with a run for each of `involved`. A stop
-     * nobody heard yet fails this call instead.
+     * The stop of a stopped triage no call has told the model about, once no call of that triage is
+     * still in flight (one of those may still tell it). Taking it marks it told.
      */
-    const join = (involved: ReadonlyArray<Broker>, ctx: CallContext) =>
+    const takeUnheardStop = (): string | undefined => {
+      if (unheard === undefined) return undefined
+      if (unheard.heard || unheard.stopMessage === undefined) {
+        unheard = undefined
+        return undefined
+      }
+      if (unheard.inFlight > 0) return undefined
+      const said = unheard.stopMessage
+      unheard.heard = true
+      unheard = undefined
+      return said
+    }
+
+    /** A call counted in `current` ended; `heard` when it ended with the stop's message. */
+    const endCall = (current: Triage, heard: boolean) => {
+      current.inFlight--
+      if (heard) current.heard = true
+      if (triage === current && current.inFlight === 0 && current.runs.size === 0 && current.opening.size === 0) {
+        triage = undefined
+      }
+    }
+
+    /** A run `enter` opened takes part in `current`, unless the triage ended meanwhile. */
+    const adopt = (current: Triage, part: ProfileRun) =>
       Effect.gen(function*() {
-        if (notice !== undefined) {
-          const said = notice
-          notice = undefined
-          return yield* new ToolError({ message: said })
+        if (triage !== current) {
+          yield* Scope.close(part.lease, Exit.void)
+          return yield* Effect.fail(current.stopMessage ?? PROFILE_GONE)
         }
-        const current: Triage = triage ?? { runs: new Map(), gone: new Set(), stopped: Deferred.makeUnsafe(), inFlight: 0 }
+        current.runs.set(part.profile, part)
+        return part
+      }).pipe(Semaphore.withPermit(lock))
+
+    /**
+     * A call starts: counted in the current triage (started now if there is none), and a run is
+     * being opened in each of `involved` that has none. A stop nobody heard yet fails it instead.
+     */
+    const enter = (involved: ReadonlyArray<Broker>, ctx: CallContext) =>
+      Effect.gen(function*() {
+        const said = takeUnheardStop()
+        if (said !== undefined) return yield* new ToolError({ message: said })
+        const current = triage ?? newTriage()
         triage = current
-        const opened: Array<ProfileRun> = []
+        current.inFlight++
+        const waits: Array<{ readonly profile: ProfileId; readonly run: Deferred.Deferred<ProfileRun, string> }> = []
         for (const broker of involved) {
           if (current.runs.has(broker.profileId)) continue
-          const part = yield* openRun(current, broker, ctx).pipe(
-            Effect.tapError(() =>
-              Effect.gen(function*() {
-                // All or nothing: undo the runs this call opened (none of them stored anything yet).
-                for (const undo of opened) {
-                  current.runs.delete(undo.profile)
-                  yield* Scope.close(undo.lease, Exit.void)
-                }
-                if (current.runs.size === 0 && triage === current) triage = undefined
+          let run = current.opening.get(broker.profileId)
+          if (run === undefined) {
+            const pending = Deferred.makeUnsafe<ProfileRun, string>()
+            run = pending
+            current.opening.set(broker.profileId, pending)
+            // In the session's scope, so it settles for every waiter even if this call is cancelled.
+            yield* openRun(current, broker, ctx).pipe(
+              Effect.mapError((error) => error.message),
+              Effect.flatMap((part) => adopt(current, part)),
+              Effect.exit,
+              Effect.flatMap((exit) =>
+                Effect.andThen(Effect.sync(() => current.opening.delete(broker.profileId)), Deferred.done(pending, exit))
+              ),
+              Effect.forkIn(sessionScope)
+            )
+          }
+          waits.push({ profile: broker.profileId, run })
+        }
+        return { current, waits }
+      }).pipe(Semaphore.withPermit(lock))
+
+    /**
+     * Runs a tool call in the triage, with a run in each of `involved`. Profiles are each on their
+     * own: one that can't take part is left out (`skipped`, with the model's message), and the call
+     * fails only when none of `involved` takes part. A stop meanwhile ends the call with the stop's
+     * message.
+     *
+     * The session lock is held only to change state, never while a broker answers. A call is
+     * counted from `enter` until it ends, and it ends in one step with its outcome, so a stop it
+     * didn't tell the model (it ended first, or was cancelled) is left for the next call, never lost.
+     */
+    const inTriage = <A, E>(
+      involved: ReadonlyArray<Broker>,
+      ctx: CallContext,
+      body: (current: Triage, skipped: ReadonlyMap<ProfileId, string>) => Effect.Effect<A, E>
+    ): Effect.Effect<A, E | ToolError> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(enter(involved, ctx), ({ current, waits }) => {
+          let stop: ToolError | undefined
+          const call = Effect.gen(function*() {
+            const skipped = new Map<ProfileId, string>()
+            for (const { profile, run } of waits) {
+              const result = yield* Effect.result(Deferred.await(run))
+              if (Result.isFailure(result)) skipped.set(profile, result.failure)
+            }
+            if (involved.length > 0 && involved.every((broker) => !current.runs.has(broker.profileId))) {
+              return yield* new ToolError({ message: skipped.values().next().value ?? PROFILE_GONE })
+            }
+            return yield* body(current, skipped)
+          })
+          return restore(
+            call.pipe(
+              Effect.raceFirst(Effect.flatMap(Deferred.await(current.stopped), (message) => Effect.fail(stop = new ToolError({ message }))))
+            )
+          ).pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                const error = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : undefined
+                endCall(current, stop !== undefined && error?._tag === "Some" && error.value === stop)
               })
             )
           )
-          opened.push(part)
-          current.runs.set(broker.profileId, part)
-          // A profile that disconnected and came back takes part again.
-          current.gone.delete(broker.profileId)
-        }
-        current.inFlight++
-        return current
-      }).pipe(Semaphore.withPermit(lock))
-
-    /** Runs a tool call in `current`: a stop meanwhile ends it with the stop's message. */
-    const inTriage = <A, E>(current: Triage, body: Effect.Effect<A, E>): Effect.Effect<A, E | ToolError> =>
-      body.pipe(
-        Effect.raceFirst(Effect.flatMap(Deferred.await(current.stopped), (message) => Effect.fail(new ToolError({ message })))),
-        Effect.ensuring(Effect.sync(() => {
-          current.inFlight--
-        }))
+        })
       )
 
     const liveBrokers = Effect.gen(function*() {
@@ -329,9 +436,7 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
     const listTabs = (ctx: CallContext) =>
       Effect.gen(function*() {
         const found = yield* liveBrokers
-        const current = yield* join(found, ctx)
-        return yield* inTriage(
-          current,
+        return yield* inTriage(found, ctx, (current, skipped) =>
           Effect.gen(function*() {
             const parts = found.flatMap((broker) => {
               const part = current.runs.get(broker.profileId)
@@ -356,10 +461,13 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
                 return yield* new ToolError({ message: result.failure.message })
               }
               yield* save(part, (run) => ({ ...run, tabs: result.success.tabs }))
+              // A profile that disconnected and came back takes part again once its tabs are listed
+              // (until then its new run knows no tabs, so its old tab ids stay out of the check).
+              current.gone.delete(part.profile)
               for (const tab of result.success.tabs) tabs.push(ids.snapshot(part.profile, tab))
             }
             if (current.runs.size === 0) return yield* new ToolError({ message: NO_BROKERS })
-            return { tabs }
+            return skipped.size === 0 ? { tabs } : { tabs, notice: skippedNotice(skipped) }
           })
         )
       })
@@ -396,9 +504,7 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
       Effect.gen(function*() {
         const found = yield* liveBrokers
         const { byProfile, answered } = resolveTabs(params.tabIds, found)
-        const current = yield* join([...byProfile.values()].map((group) => group.broker), ctx)
-        return yield* inTriage(
-          current,
+        return yield* inTriage([...byProfile.values()].map((group) => group.broker), ctx, (current, skipped) =>
           Effect.gen(function*() {
             const tool = wake ? "wake_and_read_pages" : "read_pages"
             yield* Effect.forEach([...byProfile], ([profile, group]) =>
@@ -407,7 +513,7 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
                 const fail = (error: string) => {
                   for (const { session } of group.tabs) answered.set(session, { id: session, error })
                 }
-                if (part === undefined) return fail(PROFILE_GONE)
+                if (part === undefined) return fail(skipped.get(profile) ?? PROFILE_GONE)
                 const n = group.tabs.length
                 const result = yield* tracked(
                   part,
@@ -471,9 +577,8 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
           group.questions.push({ ...question, tabIds: own as [TabId, ...Array<TabId>] })
           groups.set(profile, group)
         }
-        const current = yield* join([...groups.values()].map((group) => group.broker), ctx)
-        return yield* inTriage(
-          current,
+        if (groups.size === 0) return yield* new ToolError({ message: `None of these questions names a tab from list_tabs. ${UNKNOWN_TAB}` })
+        return yield* inTriage([...groups.values()].map((group) => group.broker), ctx, (current, skipped) =>
           Effect.gen(function*() {
             const unavailable: Array<string> = []
             yield* Effect.forEach([...groups], ([profile, group]) =>
@@ -483,7 +588,7 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
                   unavailable.push(message)
                   for (const question of group.questions) answers.set(question.id, `(not answered: ${message})`)
                 }
-                if (part === undefined) return notAsked(PROFILE_GONE)
+                if (part === undefined) return notAsked(skipped.get(profile) ?? PROFILE_GONE)
                 const askId = `ask-${nextAsk++}`
                 const withdraw = (message: string) =>
                   Effect.flatMap(DateTime.now, (at) =>
@@ -516,10 +621,9 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
                   steps: run.steps.map((step) => (step.kind === "question" && step.callId === askId ? { ...step, answers: given } : step))
                 }))
               }), { concurrency: "unbounded", discard: true })
-            if (groups.size > 0 && unavailable.length === groups.size) {
+            if (unavailable.length === groups.size) {
               return yield* new ToolError({ message: `${unavailable[0]} ${ASK_ELSEWHERE}` })
             }
-            if (groups.size === 0) return yield* new ToolError({ message: `None of these questions names a tab from list_tabs. ${UNKNOWN_TAB}` })
             return { answers: params.questions.map((question) => ({ id: question.id, answer: answers.get(question.id) ?? SKIPPED_ANSWER })) }
           })
         )
@@ -529,10 +633,8 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
 
     const submitIntentions = (params: { readonly intentions: ReadonlyArray<SubmittedIntention> }, ctx: CallContext) =>
       Effect.gen(function*() {
-        if (notice === undefined && (triage === undefined || triage.runs.size === 0)) return yield* new ToolError({ message: NEED_LIST })
-        const current = yield* join([], ctx)
-        return yield* inTriage(
-          current,
+        if (unheard === undefined && (triage === undefined || triage.runs.size === 0)) return yield* new ToolError({ message: NEED_LIST })
+        return yield* inTriage([], ctx, (current) =>
           Effect.gen(function*() {
             const parts = [...current.runs.values()]
             const known = parts.flatMap((part) => part.run.tabs.map((tab) => ids.tab(part.profile, tab.id)))
@@ -594,10 +696,12 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
             yield* Effect.sync(() => {
               if (triage === current) triage = undefined
             }).pipe(Semaphore.withPermit(lock))
-            const lostParts = saved.filter((ok) => !ok).length + current.gone.size
-            const partly = lostParts === 0
-              ? ""
-              : " Some of the tabs were in a Chrome profile that disconnected before the end; their groups weren't saved."
+            const partly = [
+              current.gone.size === 0
+                ? ""
+                : " Some of the tabs were in a Chrome profile that disconnected before the end; their groups weren't saved.",
+              saved.every((ok) => ok) ? "" : " Some groups couldn't be stored in the extension, so they may not show in the side panel."
+            ].join("")
             yield* Effect.logInfo(`mcp: tidy-up submitted (${count})`)
             return {
               message: `Saved ${count}.${partly} The user reviews them in the Wherefore side panel, where they save what matters and close the tabs. You're done: don't call any more tools.`

@@ -99,6 +99,21 @@ export const startMcp = (home: string, args: ReadonlyArray<string> = []): Effect
     (mcp) => Effect.sync(() => mcp.child.kill("SIGKILL"))
   )
 
+/** Runs `wherefore <args>` against `home` with stdin closed; resolves with its exit code and stderr. */
+export const runCli = (home: string, args: ReadonlyArray<string>) =>
+  Effect.promise(() =>
+    new Promise<{ readonly code: number | null; readonly stderr: string }>((resolve) => {
+      const child = spawn(
+        process.execPath,
+        ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", cli, ...args],
+        { env: { ...process.env, WHEREFORE_HOME: home }, stdio: ["ignore", "pipe", "pipe"] }
+      )
+      let stderr = ""
+      child.stderr.on("data", (chunk) => (stderr += chunk))
+      child.on("exit", (code) => resolve({ code, stderr }))
+    })
+  )
+
 /** Waits (real time) until `condition` holds. */
 export const eventually = (condition: () => boolean, ms = 10_000) =>
   Effect.promise(async () => {
