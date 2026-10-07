@@ -9,7 +9,7 @@
  */
 import type { RunId } from "@wherefore/core"
 import { Effect, type Layer, Stream } from "effect"
-import { itemsKey, settingsKey } from "../store/keys.ts"
+import { agentOptionsKey, itemsKey, settingsKey } from "../store/keys.ts"
 import type { StoreKey } from "../store/StoreKey.ts"
 import { StoreReader } from "../store/StoreReader.ts"
 import { Atom } from "../unstable.ts"
@@ -33,7 +33,9 @@ export const itemsAtom = Atom.keepAlive(panelRuntime.atom(watchKey(itemsKey)))
 export const runsAtom = Atom.keepAlive(
   panelRuntime.atom(Stream.unwrap(Effect.map(Effect.service(StoreReader), (reader) => reader.watchRuns)))
 )
-/** The worker's link to the companion (Settings, and onboarding in M2 PR C). */
+/** What the ACP agent offered on its last run (model, effort), for Settings. */
+export const agentOptionsAtom = Atom.keepAlive(panelRuntime.atom(watchKey(agentOptionsKey)))
+/** The worker's link to the companion (Settings and onboarding). */
 export const companionAtom = Atom.keepAlive(
   panelRuntime.atom(Stream.unwrap(Effect.map(Effect.service(StoreReader), (reader) => reader.watchCompanion)))
 )

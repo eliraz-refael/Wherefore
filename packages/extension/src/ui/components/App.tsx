@@ -1,9 +1,10 @@
 /**
- * The side panel: first run until there is an API key, then Your list (home), Tidy up, the Done
- * archive and Settings. One toast for outcomes and undo, in a live region.
+ * The side panel: first run until the user has chosen how to run (Claude Code through the
+ * companion, or an API key), then Your list (home), Tidy up, the Done archive and Settings. One
+ * toast for outcomes and undo, in a live region.
  *
  * A tidy-up an agent runs through the companion (MCP) shows up by itself: the panel switches to it
- * once, from home, so its questions are seen; and it shows even before an API key is set.
+ * once, from home, so its questions are seen; and it shows even before the user has chosen.
  */
 import { useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { RunId } from "@wherefore/core"
@@ -53,7 +54,8 @@ export function App() {
         onFailure: () => <SettingsProblem />,
         onSuccess: ({ value }) => {
           // A companion run needs no API key, so its screen shows without one.
-          if (value.apiKey === undefined && screen.name !== "settings" && screen.name !== "tidy") return <Onboarding />
+          const chosen = value.apiKey !== undefined || value.mode !== undefined
+          if (!chosen && screen.name !== "settings" && screen.name !== "tidy") return <Onboarding />
           switch (screen.name) {
             case "home":
               return <Home />
@@ -79,6 +81,9 @@ function FollowCompanionRuns() {
   const screen = useAtomValue(screenAtom)
   const setScreen = useAtomSet(screenAtom)
   const shown = useRef(new Set<RunId>())
+  // A run this panel has shown (it started it, or the user opened it) isn't followed again: going
+  // back to the list stays there.
+  if (screen.name === "tidy") shown.current.add(screen.runId)
   const running = AsyncResult.isSuccess(runs)
     ? runs.value.runs.findLast((run) => run.status === "running" && run.mode !== "api")
     : undefined

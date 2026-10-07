@@ -2,7 +2,7 @@
  * The worker's RPC handlers: `WorkerRpcs` (core rpc.ts) implemented with `TabTools`, `Store`,
  * `RunLocks`, `CompanionLink` and `CompanionRuns`, and the layer that serves them to extension pages.
  */
-import { ItemNotFound, WorkerRpcs } from "@wherefore/core"
+import { COMPANION_NOT_CONNECTED_MESSAGE, CompanionNotConnected, ItemNotFound, WorkerRpcs } from "@wherefore/core"
 import { Effect, Layer } from "effect"
 import { CompanionLink } from "../companion/CompanionLink.ts"
 import { CompanionRuns } from "../companion/CompanionRuns.ts"
@@ -44,6 +44,13 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
     set_run_reviewed: ({ id, reviewed }) => store.setRunReviewed(id, reviewed),
     answer_ask: ({ runId, askId, answers }) => companionRuns.answer(runId, askId, answers),
     stop_run: ({ id }) => companionRuns.stop(id),
+    // ACP mode: only with the companion connected; the agent's command comes from Settings.
+    start_agent_run: () =>
+      Effect.gen(function*() {
+        const status = yield* companion.status
+        if (status._tag !== "Connected") return yield* new CompanionNotConnected({ message: COMPANION_NOT_CONNECTED_MESSAGE })
+        return yield* companionRuns.startAgent(companion.startAgent)
+      }),
     check_companion: () => companion.check
   })
 }))

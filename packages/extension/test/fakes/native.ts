@@ -4,11 +4,19 @@
  * with Chrome's own error message, and the extension's `disconnect()` doesn't fire its own
  * `onDisconnect`.
  */
-import { CompanionWorkerRpcs, NATIVE_PROTOCOL_VERSION } from "@wherefore/core"
-import { Effect, Layer, Queue, type Scope } from "effect"
+import {
+  type AgentEvent,
+  type AgentPrefs,
+  AgentRpcs,
+  type AgentRunError,
+  CompanionWorkerRpcs,
+  NATIVE_PROTOCOL_VERSION,
+  type RunId
+} from "@wherefore/core"
+import { Effect, Layer, Queue, type Scope, Stream } from "effect"
 import { FORBIDDEN, NOT_FOUND } from "../../src/companion/CompanionLink.ts"
 import { NativeConnector, type NativePort } from "../../src/companion/NativeConnector.ts"
-import { RpcClient, type RpcMessage, RpcSerialization } from "../../src/unstable.ts"
+import { RpcClient, type RpcMessage, RpcSerialization, RpcServer } from "../../src/unstable.ts"
 
 /** How the host behaves on a new connection. */
 export type HostMode =
@@ -148,4 +156,67 @@ export const brokerClient = (connection: HostConnection) =>
     return yield* RpcClient.make(CompanionWorkerRpcs, { flatten: true, disableTracing: true }).pipe(
       Effect.provideService(RpcClient.Protocol, protocol)
     )
+  }) satisfies Effect.Effect<unknown, never, Scope.Scope>
+
+/** What the worker asked the fake broker for (`start_agent`). */
+export interface AgentRequest {
+  readonly runId: RunId
+  readonly command: string
+  readonly prefs: AgentPrefs
+}
+
+/**
+ * The broker's side of ACP mode on a connection: a real RPC server of `AgentRpcs` (the worker's
+ * `ToBroker` frames in, `FromBroker` frames out), whose `start_agent` is the test's script. The
+ * requests it got, and how each ended (`interrupted` when the worker stopped following it), are
+ * recorded.
+ */
+export const fakeAgentBroker = (
+  connection: HostConnection,
+  script: (request: AgentRequest) => Stream.Stream<AgentEvent, AgentRunError>
+) =>
+  Effect.gen(function*() {
+    const requests: Array<AgentRequest> = []
+    const ended: Array<string> = []
+    const calls = yield* Queue.unbounded<RpcMessage.FromClientEncoded>()
+    const previous = connection.onReceive
+    connection.onReceive = (message) => {
+      previous(message)
+      const frame = message as { readonly _tag?: unknown; readonly rpc?: unknown }
+      if (frame._tag === "ToBroker") Queue.offerUnsafe(calls, frame.rpc as RpcMessage.FromClientEncoded)
+    }
+    const protocol = yield* RpcServer.Protocol.make((writeRequest) =>
+      Effect.gen(function*() {
+        yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(calls), (request) => writeRequest(0, request))))
+        return {
+          disconnects: yield* Queue.unbounded<number>(),
+          send: (_clientId, response) => Effect.sync(() => connection.send({ _tag: "FromBroker", rpc: response })),
+          end: () => Effect.void,
+          clientIds: Effect.succeed(new Set([0])),
+          initialMessage: Effect.succeedNone,
+          supportsAck: true,
+          supportsTransferables: false,
+          supportsSpanPropagation: false,
+          supportsNotifications: false,
+          codecFor: RpcSerialization.json.codecFor
+        }
+      })
+    )
+    yield* RpcServer.make(AgentRpcs, { disableTracing: true }).pipe(
+      Effect.provideService(RpcServer.Protocol, protocol),
+      Effect.provide(AgentRpcs.toLayer(AgentRpcs.of({
+        start_agent: (request) => {
+          requests.push(request)
+          return script(request).pipe(
+            Stream.onExit((exit) =>
+              Effect.sync(() => {
+                ended.push(exit._tag === "Success" ? "finished" : exit.cause.reasons.some((reason) => reason._tag === "Interrupt") ? "interrupted" : "failed")
+              })
+            )
+          )
+        }
+      }))),
+      Effect.forkScoped
+    )
+    return { requests, ended }
   }) satisfies Effect.Effect<unknown, never, Scope.Scope>

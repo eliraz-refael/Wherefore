@@ -4,12 +4,20 @@
  * browser, scripted model). See test/fakes/panel.tsx.
  */
 import { afterEach, describe, expect, it } from "@effect/vitest"
-import { INTERRUPTED_MESSAGE, Run } from "@wherefore/core"
+import {
+  type AgentEvent,
+  AgentNotLoggedIn,
+  type AgentRunError,
+  agentNotLoggedInMessage,
+  DEFAULT_AGENT_COMMAND,
+  INTERRUPTED_MESSAGE,
+  Run
+} from "@wherefore/core"
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
-import { Effect, Exit, Schema, Scope, Stream } from "effect"
+import { type Cause, Effect, Exit, Queue, Schema, Scope, Stream } from "effect"
 import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
-import { brokerClient, FakeNativeHost } from "./fakes/native.ts"
+import { brokerClient, fakeAgentBroker, FakeNativeHost } from "./fakes/native.ts"
 import { FakeRelayHub } from "./fakes/page.ts"
 import { envelope, ISO_NOW, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
 
@@ -43,7 +51,8 @@ describe("first run", () => {
     fireEvent.click(save)
 
     expect(await view.ui.findByRole("heading", { level: 1, name: "Your list is empty" })).toBeTruthy()
-    expect(storedData(chrome, "settings")).toEqual({ apiKey: "sk-ant-secret-key-1234" })
+    // Onboarding's API path records the choice too.
+    expect(storedData(chrome, "settings")).toEqual({ apiKey: "sk-ant-secret-key-1234", mode: "api" })
     expect(view.container.innerHTML).not.toContain("sk-ant-secret-key")
 
     // Settings shows it masked, and the model picker offers API_MODELS.
@@ -65,7 +74,8 @@ describe("Settings: companion", () => {
     await app.start()
     const view = app.open()
     fireEvent.click(await view.ui.findByRole("button", { name: "Settings" }))
-    expect(await view.ui.findByText("Not installed. Claude Code and MCP need it; API mode doesn't.")).toBeTruthy()
+    expect(await view.ui.findByText("Not installed. Claude Code and MCP need it; an API key doesn't.")).toBeTruthy()
+    expect(view.ui.getByRole("link", { name: "How to install the companion" }).getAttribute("href")).toContain("packages/companion/README.md")
 
     native.mode = "answer"
     fireEvent.click(view.ui.getByRole("button", { name: "Check again" }))
@@ -621,7 +631,8 @@ describe("Tidy up, through an agent (MCP)", () => {
       await waitFor(() => expect((app.chrome.session.get("companion") as any)?._tag).toBe("Connected"))
       const broker = await Effect.runPromise(brokerClient(app.harness.native.last!).pipe(Scope.provide(scope)))
       const view = app.open()
-      expect(await view.ui.findByRole("button", { name: "Save key and continue" })).toBeTruthy()
+      // First run: with the companion connected, onboarding offers Claude Code.
+      expect(await view.ui.findByRole("button", { name: "Use an API key instead" })).toBeTruthy()
 
       const signals: Array<unknown> = []
       Effect.runFork(broker("open_run", { id: "mcp-1" as never, mode: "mcp" }).pipe(
@@ -655,5 +666,165 @@ describe("Tidy up, through an agent (MCP)", () => {
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void))
     }
+  })
+})
+
+describe("Tidy up, with Claude Code (ACP)", () => {
+  /** An agent the test drives, behind the fake companion's broker. */
+  const connectAgent = async (app: Panels, scope: Scope.Scope) => {
+    await waitFor(() => expect((app.chrome.session.get("companion") as any)?._tag).toBe("Connected"))
+    const events = Effect.runSync(Queue.unbounded<AgentEvent, AgentRunError | Cause.Done>())
+    const host = app.harness.native.last!
+    const broker = await Effect.runPromise(fakeAgentBroker(host, () => Stream.fromQueue(events)).pipe(Scope.provide(scope)))
+    const session = await Effect.runPromise(brokerClient(host).pipe(Scope.provide(scope)))
+    return { events, broker, session }
+  }
+
+  const acpRun = (id: string, extra: Record<string, unknown> = {}) =>
+    Schema.decodeUnknownSync(Run)({
+      id,
+      mode: "acp",
+      model: "unknown",
+      startedAt: ISO_NOW(),
+      status: "running",
+      tabs: RUN_TABS.map((tab, index) => snapshot(tab.id, tab.windowId, index, tab.title ?? "", tab.url)),
+      steps: [{ kind: "tool", at: ISO_NOW(), callId: "list_tabs:1", tool: "list_tabs", status: "running", summary: "Listing tabs" }],
+      intentions: [],
+      usage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      ...extra
+    })
+
+  it("first run offers Claude Code: Tidy up starts it at once, its MCP session fills the run, and the results show", async () => {
+    const app = make(new FakeChrome({ tabs: RUN_TABS }), new ScriptedModel([]), new FakeNativeHost("answer"))
+    await app.start()
+    const scope = Effect.runSync(Scope.make())
+    try {
+      const { events, broker, session } = await connectAgent(app, scope)
+      const view = app.open()
+      const start = await view.ui.findByRole("button", { name: "Tidy up my 2 tabs" })
+      expect(view.ui.getByText(/Uses your Claude Code login/)).toBeTruthy()
+      expect(view.ui.queryByLabelText("Anthropic API key")).toBeNull()
+      fireEvent.click(start)
+
+      // The run shows at once, before the agent did anything.
+      expect(await view.ui.findByText("Starting Claude Code…")).toBeTruthy()
+      expect(view.ui.getByText(/Claude Code is working through your tabs/)).toBeTruthy()
+      expect(storedData(app.chrome, "settings")).toEqual({ mode: "companion" })
+      // Back to the list stays there (the panel doesn't pull you back to a run it already showed).
+      fireEvent.click(view.ui.getByRole("button", { name: "Back to your list" }))
+      expect(await view.ui.findByText("Tidying up…")).toBeTruthy()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(view.ui.queryByText("Starting Claude Code…")).toBeNull()
+      fireEvent.click(view.ui.getByRole("button", { name: "Show" }))
+      expect(await view.ui.findByText("Starting Claude Code…")).toBeTruthy()
+      await waitFor(() => expect(broker.requests).toHaveLength(1))
+      const runId = broker.requests[0]!.runId
+      expect(broker.requests[0]).toEqual({ runId, command: DEFAULT_AGENT_COMMAND, prefs: {} })
+
+      // The agent's MCP session attaches and works; then stores its result.
+      const signals: Array<unknown> = []
+      Effect.runFork(session("open_run", { id: runId, mode: "acp" }).pipe(
+        Stream.runForEach((signal) => Effect.sync(() => signals.push(signal))),
+        Effect.forkIn(scope)
+      ))
+      await waitFor(() => expect(signals).toEqual([{ _tag: "Opened" }]))
+      await Effect.runPromise(session("update_run", { run: acpRun(runId) }))
+      expect(await view.ui.findByText("Looking at your tabs…")).toBeTruthy()
+      await Effect.runPromise(session("update_run", {
+        run: acpRun(runId, {
+          status: "succeeded",
+          finishedAt: ISO_NOW(),
+          steps: [],
+          intentions: [intention(`${runId}:0`, "Review the auth PR", "work", [1]), intention(`${runId}:1`, "Pick a desk", "decide", [2])]
+        })
+      }))
+      expect(await view.ui.findByRole("heading", { level: 1, name: "Here’s what your tabs were for" })).toBeTruthy()
+      Effect.runSync(Queue.offer(events, { _tag: "Finished", stopReason: "end_turn" }))
+      Effect.runSync(Queue.end(events))
+      await waitFor(() => expect(broker.ended).toEqual(["finished"]))
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void))
+    }
+  })
+
+  it("without the companion, first run is the API key, with a hint to install the companion", async () => {
+    const app = make(new FakeChrome({ tabs: RUN_TABS }))
+    await app.start()
+    const view = app.open()
+    expect(await view.ui.findByLabelText("Anthropic API key")).toBeTruthy()
+    const link = view.ui.getByRole("link", { name: "install the companion" })
+    expect(link.getAttribute("href")).toBe("https://github.com/eliraz-refael/Wherefore/blob/main/packages/companion/README.md")
+    expect(view.ui.queryByRole("button", { name: /Tidy up my/ })).toBeNull()
+  })
+
+  it("shows why the agent couldn't run, and offers to start again", async () => {
+    const app = make(
+      new FakeChrome({ tabs: RUN_TABS, local: { settings: envelope({ mode: "companion" }) } }),
+      new ScriptedModel([]),
+      new FakeNativeHost("answer")
+    )
+    await app.start()
+    const scope = Effect.runSync(Scope.make())
+    try {
+      const { events, broker } = await connectAgent(app, scope)
+      const view = app.open()
+      fireEvent.click(await view.ui.findByRole("button", { name: "Tidy up" }))
+      await waitFor(() => expect(broker.requests).toHaveLength(1))
+      Effect.runSync(Queue.fail(events, new AgentNotLoggedIn({ message: agentNotLoggedInMessage(DEFAULT_AGENT_COMMAND) })))
+      expect(await view.ui.findByRole("heading", { level: 2, name: "This tidy-up didn't finish" })).toBeTruthy()
+      expect(view.ui.getByText(agentNotLoggedInMessage(DEFAULT_AGENT_COMMAND))).toBeTruthy()
+      expect(view.ui.getByRole("button", { name: "Start again" })).toBeTruthy()
+      expect(view.ui.queryByText(/To try again, ask/)).toBeNull()
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void))
+    }
+  })
+
+  it("Settings: the mode choice, the agent's model and effort as it offered them, and the agent command", async () => {
+    const offered = {
+      command: DEFAULT_AGENT_COMMAND,
+      at: 1,
+      settings: [
+        { id: "model", name: "Model", category: "model", value: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }, { value: "opus", name: "Opus" }] },
+        { id: "effort", name: "Effort", category: "thought_level", value: "medium", choices: [{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "high", name: "High" }] }
+      ]
+    }
+    const chrome = new FakeChrome({
+      tabs: RUN_TABS,
+      local: { settings: envelope({ mode: "companion", agentPrefs: { model: "gone-model" } }), agentOptions: envelope(offered) }
+    })
+    const app = make(chrome, new ScriptedModel([]), new FakeNativeHost("answer"))
+    await app.start()
+    await waitFor(() => expect((app.chrome.session.get("companion") as any)?._tag).toBe("Connected"))
+    const view = app.open()
+    fireEvent.click(await view.ui.findByRole("button", { name: "Settings" }))
+    expect((await view.ui.findByRole("radio", { name: /Claude Code/ }) as HTMLInputElement).checked).toBe(true)
+    // A stale pick shows the agent's current value; the line names the model.
+    const model = view.ui.getByLabelText("Model") as HTMLSelectElement
+    expect(model.value).toBe("sonnet")
+    expect(view.ui.getByText("Uses your Claude Code login · Sonnet")).toBeTruthy()
+    expect([...model.options].map((option) => option.textContent)).toEqual(["Sonnet", "Opus"])
+    fireEvent.change(model, { target: { value: "opus" } })
+    await waitFor(() => expect(storedData(chrome, "settings").agentPrefs).toEqual({ model: "opus" }))
+    fireEvent.change(view.ui.getByLabelText("How carefully to look"), { target: { value: "high" } })
+    await waitFor(() => expect(storedData(chrome, "settings").agentPrefs).toEqual({ model: "opus", effort: "high" }))
+    // No permission modes, ever.
+    expect(view.container.textContent).not.toMatch(/bypass|permission mode/i)
+
+    // The agent command.
+    const command = view.ui.getByLabelText("Command the companion runs") as HTMLInputElement
+    expect(command.value).toBe(DEFAULT_AGENT_COMMAND)
+    fireEvent.change(command, { target: { value: "  my-agent --acp " } })
+    fireEvent.click(view.ui.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(storedData(chrome, "settings").agentCommand).toBe("my-agent --acp"))
+    // Another agent: the last agent's options don't apply to it.
+    await waitFor(() => expect(view.ui.queryByLabelText("How carefully to look")).toBeNull())
+    fireEvent.click(view.ui.getByRole("button", { name: "Use the default" }))
+    await waitFor(() => expect(storedData(chrome, "settings").agentCommand).toBeUndefined())
+
+    // Switching to the API key shows the key.
+    fireEvent.click(view.ui.getByRole("radio", { name: /Anthropic API key/ }))
+    await waitFor(() => expect(storedData(chrome, "settings").mode).toBe("api"))
+    expect(await view.ui.findByText("No key yet")).toBeTruthy()
   })
 })

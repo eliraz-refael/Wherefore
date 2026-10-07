@@ -1,6 +1,7 @@
 /**
- * Tidy up, for a view: starts API-mode runs in this page (`TriageAgent`), and answers or stops a
- * run wherever it lives.
+ * Tidy up, for a view: starts a run in the mode Settings choose (`tidyModeOf`): through the
+ * companion (ACP mode: the worker creates the run and the companion starts Claude Code), or in this
+ * page (API mode, `TriageAgent`); and answers or stops a run wherever it lives.
  *
  * A run lives in the page that started it (architecture A4), but every open view shows it (from the
  * Store). So a side panel in another window can show a run's question, or its Stop button, while
@@ -11,12 +12,23 @@
  * A run the companion drives (MCP, ACP) has no owning page: its questions wait in the worker, so
  * answers and Stop go to the worker (`answer_ask`, `stop_run`), and the first answer wins there.
  */
-import { Answer, type QuestionStep, type Run, RunId } from "@wherefore/core"
+import {
+  Answer,
+  type BrowserError,
+  type CompanionNotConnected,
+  type QuestionStep,
+  type Run,
+  RunId,
+  type StoreUnreadable,
+  tidyModeOf
+} from "@wherefore/core"
 import { Context, Deferred, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect"
 import { QuestionsInbox } from "../agent/Questions.ts"
 import { type RunHandle, type StartError, TriageAgent } from "../agent/TriageAgent.ts"
-import { WorkerClient } from "../messaging/WorkerClient.ts"
+import { WorkerClient, type WorkerUnavailable } from "../messaging/WorkerClient.ts"
 import { RunLocks } from "../runs/RunLocks.ts"
+import { settingsKey } from "../store/keys.ts"
+import { StoreReader } from "../store/StoreReader.ts"
 
 /** How long a view waits for the page that owns a run to confirm an answer. */
 export const RELAY_TIMEOUT = Duration.seconds(3)
@@ -66,9 +78,15 @@ export class RelayChannel extends Context.Service<RelayChannel, {
   )
 }
 
+/** Why Tidy up couldn't start a run. */
+export type TidyStartError = StartError | CompanionNotConnected | StoreUnreadable | BrowserError | WorkerUnavailable
+
 export class Tidy extends Context.Service<Tidy, {
-  /** Starts a run in this page. */
-  readonly start: Effect.Effect<RunId, StartError>
+  /**
+   * Starts a run: through the companion (the worker creates it) in ACP mode, else in this page
+   * (API mode). Returns its id as soon as it is stored.
+   */
+  readonly start: Effect.Effect<RunId, TidyStartError>
   /**
    * Answers an ask, in this page, the page that owns it, or the worker (companion runs). False when
    * it was already answered (or withdrawn), or nobody owns it any more.
@@ -84,7 +102,7 @@ export class Tidy extends Context.Service<Tidy, {
    */
   readonly whenGone: (id: RunId) => Effect.Effect<void>
 }>()("@wherefore/extension/Tidy") {
-  static readonly layer: Layer.Layer<Tidy, never, TriageAgent | QuestionsInbox | RunLocks | RelayChannel | WorkerClient> =
+  static readonly layer: Layer.Layer<Tidy, never, TriageAgent | QuestionsInbox | RunLocks | RelayChannel | WorkerClient | StoreReader> =
     Layer.effect(Tidy)(Effect.suspend(() => make))
 }
 
@@ -94,6 +112,7 @@ const make = Effect.gen(function*() {
   const locks = yield* RunLocks
   const channel = yield* RelayChannel
   const worker = yield* WorkerClient
+  const reader = yield* StoreReader
   const runs = new Map<RunId, RunHandle>()
   const waiting = new Map<string, Deferred.Deferred<boolean>>()
 
@@ -131,9 +150,14 @@ const make = Effect.gen(function*() {
     Effect.forkScoped
   )
 
-  const start = Effect.map(agent.start(), (handle) => {
+  const startHere = Effect.map(agent.start(), (handle) => {
     runs.set(handle.id, handle)
     return handle.id
+  })
+
+  const start: Effect.Effect<RunId, TidyStartError> = Effect.gen(function*() {
+    const settings = yield* reader.get(settingsKey)
+    return tidyModeOf(settings) === "companion" ? yield* worker.call("start_agent_run", undefined) : yield* startHere
   })
 
   const answerElsewhere = (runId: RunId, askId: string, answers: ReadonlyArray<Answer>) =>

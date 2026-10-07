@@ -4,7 +4,8 @@
  * anywhere but that package's own src/unstable.ts (architecture A1: unstable Effect modules sit
  * behind one re-export file per package, so moving to Effect 4.0.0's paths changes one file).
  * `@effect/ai-anthropic` and `@effect/platform-node(-shared)` are held to the same rule: they are
- * built on `effect/unstable/*` (ai; socket, cli, process) and move with it.
+ * built on `effect/unstable/*` (ai; socket, cli, process) and move with it. So is
+ * `@agentclientprotocol/sdk` (M2 PR C): a 1.x protocol library, kept behind one service of ours.
  *
  * Catches static imports and re-exports (`from "..."`), side-effect imports, dynamic `import()`
  * and `require()`. Plain Node, no dependencies, no shell: runs the same on Linux, macOS and Windows.
@@ -20,9 +21,9 @@ const SCANNED_DIRS = ["src", "test"]
 const ALLOWED = join("src", "unstable.ts")
 
 // `from "x"`, `import "x"`, `import("x")`, `require("x")`, where x is effect/unstable,
-// @effect/ai-anthropic or @effect/platform-node(-shared), or below one of them.
+// @effect/ai-anthropic, @effect/platform-node(-shared) or @agentclientprotocol/sdk, or below one of them.
 const UNSTABLE_IMPORT =
-  /\b(?:from|import|require)\s*\(?\s*(["'`])((?:effect\/unstable|@effect\/ai-anthropic|@effect\/platform-node(?:-shared)?)(?:\/[^"'`\s]*)?)\1/g
+  /\b(?:from|import|require)\s*\(?\s*(["'`])((?:effect\/unstable|@effect\/ai-anthropic|@effect\/platform-node(?:-shared)?|@agentclientprotocol\/sdk)(?:\/[^"'`\s]*)?)\1/g
 
 /** Every source file under `dir`, skipping node_modules. */
 function* sourceFiles(dir) {
@@ -64,7 +65,7 @@ for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
 
 if (violations.length > 0) {
   console.error(
-    "effect/unstable/*, @effect/ai-anthropic and @effect/platform-node(-shared) may only be imported from each package's src/unstable.ts:\n"
+    "effect/unstable/*, @effect/ai-anthropic, @effect/platform-node(-shared) and @agentclientprotocol/sdk may only be imported from each package's src/unstable.ts:\n"
   )
   for (const violation of violations) console.error(`  ${violation}`)
   console.error("\nRe-export what you need from that package's src/unstable.ts and import it from there.")

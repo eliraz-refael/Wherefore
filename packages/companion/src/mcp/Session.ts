@@ -3,6 +3,10 @@
  * the brokers of the connected Chrome profiles, recorded as runs in those profiles.
  *
  * - **Ids.** The model sees session ids (ids.ts); everything sent to a profile uses its real ids.
+ * - **ACP mode** (`--run`, M2 PR C): the session's runs are `acp`, and the first triage's run is
+ *   the one the side panel created; `open_run` attaches to it in the worker instead of opening a
+ *   new one. A later triage in the same session is refused by the worker (`RunNotActive`): an ACP
+ *   agent gets one tidy-up.
  * - **A triage** starts with the first tool call and ends when `submit_intentions` passes the
  *   coverage check, when the user stops it in a panel, or when the session ends. It records one run
  *   per profile it touches (`mode: "mcp"`), stored in that profile's Store by its worker: the run is
@@ -280,12 +284,16 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
           ),
           Effect.onExit((exit): Effect.Effect<void> => {
             if (!Deferred.isDoneUnsafe(opened)) {
-              const error: Option.Option<{ readonly _tag: string; readonly source?: RunMode }> | undefined = Exit.isFailure(exit)
-                ? Cause.findErrorOption(exit.cause)
-                : undefined
+              const error: Option.Option<{ readonly _tag: string; readonly source?: RunMode; readonly message?: string }> | undefined =
+                Exit.isFailure(exit)
+                  ? Cause.findErrorOption(exit.cause)
+                  : undefined
               const message = error?._tag === "Some"
                 ? error.value._tag === "RunAlreadyActive"
                   ? runActiveMessage(error.value.source)
+                  : error.value._tag === "RunNotActive"
+                  // ACP mode: the run the panel started is over (stopped, failed) or isn't this profile's.
+                  ? `${error.value.message ?? "This tidy-up isn't running in the extension any more."} ${STOP_GUIDANCE}`
                   : isGone(error.value)
                   ? PROFILE_GONE
                   : `Wherefore couldn't start a tidy-up in this Chrome profile (${error.value._tag}).`

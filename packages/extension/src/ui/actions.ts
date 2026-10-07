@@ -6,6 +6,8 @@
 import {
   type Answer,
   type ApiModel,
+  DEFAULT_AGENT_COMMAND,
+  type TidyMode,
   normalizeUrl,
   type ResettableKey,
   type Run,
@@ -62,6 +64,8 @@ export const describeError = (error: unknown): string => {
       return runSourceOf(error) === "api" || runSourceOf(error) === undefined
         ? "A tidy-up is already running in another window."
         : "An agent is tidying up your tabs right now."
+    case "CompanionNotConnected":
+      return message !== "" ? message : "The Wherefore companion isn't connected."
     case "ModelError":
       return message !== "" ? message : "The model couldn't be reached. Try again."
     default:
@@ -85,6 +89,24 @@ const updateSettings = (change: (settings: Settings) => Settings) =>
 
 /** Saves the API key (trimmed). It is never logged, and views show it masked from now on. */
 export const saveApiKey = (key: string) => updateSettings((settings) => ({ ...settings, apiKey: key.trim() }))
+
+/** Onboarding's API path: the key, and API mode as the user's choice. */
+export const chooseApiKey = (key: string) => updateSettings((settings) => ({ ...settings, apiKey: key.trim(), mode: "api" as const }))
+
+/** How Tidy up runs: through the companion (Claude Code) or with the API key. */
+export const setTidyMode = (mode: TidyMode) => updateSettings((settings) => ({ ...settings, mode }))
+
+/** The ACP agent's command; empty (or the default) goes back to the default. */
+export const setAgentCommand = (command: string) =>
+  updateSettings((settings) => {
+    const { agentCommand: _, ...rest } = settings
+    const trimmed = command.trim()
+    return trimmed === "" || trimmed === DEFAULT_AGENT_COMMAND ? rest : { ...rest, agentCommand: trimmed }
+  })
+
+/** One of the agent's settings (model, effort), as the user picked it. Applied from the next tidy-up. */
+export const setAgentPref = (id: string, value: string | boolean) =>
+  updateSettings((settings) => ({ ...settings, agentPrefs: { ...settings.agentPrefs, [id]: value } }))
 
 export const setModel = (model: ApiModel) => updateSettings((settings) => ({ ...settings, model }))
 
@@ -189,8 +211,8 @@ export const putBack = (item: SavedItem) =>
 // ---------- tidy up ----------
 
 /**
- * Tidy up: starts a run in this page, or finds the one already running in another window. Returns
- * the run to show.
+ * Tidy up: starts a run (through the companion, or in this page; `Tidy.start`), or finds the one
+ * already running. Returns the run to show.
  */
 export const startTidy = Effect.gen(function*() {
   const tidy = yield* Tidy
@@ -204,6 +226,9 @@ export const startTidy = Effect.gen(function*() {
       }))
   )
 })
+
+/** Onboarding's Claude Code path: Claude Code as the user's choice, then a tidy-up right away. */
+export const startWithClaudeCode = Effect.andThen(setTidyMode("companion"), startTidy)
 
 export const answerAsk = (run: Run, askId: string, answers: ReadonlyArray<Answer>) =>
   Effect.flatMap(Effect.service(Tidy), (tidy) => tidy.answer(run, askId, answers))

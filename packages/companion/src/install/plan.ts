@@ -9,8 +9,10 @@
  *   value is the manifest's path.
  * The manifest's `path` is a small wrapper script in the state directory, which runs this CLI
  * with the same Node that ran `install`. Chrome launches it with a minimal environment, so the
- * wrapper also sets a few variables from the installing shell (the ACP agent needs them in M2
- * PR C). API keys are never copied.
+ * wrapper also sets a few variables from the installing shell, which the ACP agent the broker
+ * starts inherits (`PATH` to find `npx`, `CLAUDE_CONFIG_DIR` for the user's Claude Code login), and
+ * the pinned Node and CLI (`WHEREFORE_NODE`, `WHEREFORE_CLI`), which the broker gives the agent for
+ * its MCP server. API keys are never copied.
  */
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
 import { type Location, pathFor, type Platform, stateDir } from "../paths.ts"
@@ -187,6 +189,8 @@ export const wrapperScript = (platform: Platform, input: WrapperInput): string =
     'if [ ! -x "$node" ]; then',
     '  node=$(command -v node) || { echo "wherefore: no Node found (pinned one is gone, none on PATH); run install again" >&2; exit 127; }',
     "fi",
+    // The broker starts `wherefore mcp` for ACP agents with these (src/acp/command.ts).
+    'export WHEREFORE_NODE="$node" WHEREFORE_CLI="$cli"',
     'exec "$node" "$cli" native-host "$@"',
     ""
   ].join("\n")

@@ -1,13 +1,18 @@
 /**
  * A fake Chrome for the broker: the host's stdin and stdout in memory (Effect's `Stdio`), with a
  * fake service worker on the other side of the "native port". The worker is a real
- * `effect/unstable/rpc` server of core's `TabToolRpcs`, like the extension's, so the broker is
- * tested against the same protocol it meets in Chrome.
+ * `effect/unstable/rpc` server of core's `CompanionWorkerRpcs`, like the extension's, so the broker
+ * is tested against the same protocol it meets in Chrome; and a real client of the broker's
+ * `AgentRpcs` (ACP mode), as the extension's `CompanionLink` is.
  */
 import * as Fs from "node:fs/promises"
 import * as Os from "node:os"
 import * as NodePath from "node:path"
 import {
+  type AgentEvent,
+  type AgentPrefs,
+  AgentRpcs,
+  type AgentRunError,
   type AskPanelError,
   CompanionWorkerRpcs,
   EXTENSION_ORIGIN,
@@ -19,8 +24,10 @@ import {
   type Run,
   type RunAlreadyActive,
   RunNotActive,
+  type RunId,
   type RunSignal,
   type RpcFromClient,
+  type RpcFromServer,
   ToolError
 } from "@wherefore/core"
 import { type Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema, Scope, Sink, Stdio, Stream } from "effect"
@@ -28,7 +35,16 @@ import { runNativeHost } from "../src/broker/nativeHost.ts"
 import type { RegistryEntry } from "../src/broker/registry.ts"
 import { encodeFrame, makeFrameDecoder } from "../src/native/codec.ts"
 import { type Location, platformOf, registryDir } from "../src/paths.ts"
-import { RpcSerialization, RpcServer } from "../src/unstable.ts"
+import {
+  NodeChildProcessSpawner,
+  NodeFileSystem,
+  NodePath as NodePathLayer,
+  RpcClient,
+  type RpcClientError,
+  type RpcMessage,
+  RpcSerialization,
+  RpcServer
+} from "../src/unstable.ts"
 
 export const PROFILE = "abcdefghijklmnopqrstuvwxyz" as ProfileId
 
@@ -62,7 +78,17 @@ export interface FakeChromeOptions {
   }) => Effect.Effect<{ readonly answers: ReadonlyArray<{ readonly id: string; readonly answer: string }> }, AskPanelError>
   /** Another run is going in this profile: `open_run` fails with this. */
   readonly busy?: RunAlreadyActive
+  /** What the agent's MCP server runs (ACP mode). */
+  readonly mcp?: { readonly node: string; readonly cli: string }
+  /** The agent's environment (ACP mode). */
+  readonly env?: Readonly<Record<string, string | undefined>>
 }
+
+/** The worker's client of the broker's `AgentRpcs`. */
+export type AgentClient = (
+  tag: "start_agent",
+  payload: { readonly runId: RunId; readonly command: string; readonly prefs: AgentPrefs }
+) => Stream.Stream<AgentEvent, AgentRunError | RpcClientError.RpcClientError>
 
 export const NO_PANEL = "The Wherefore side panel isn't open in this Chrome profile, so the user can't see the questions."
 
@@ -84,6 +110,10 @@ export class FakeChrome {
   readonly runs: Map<string, Run>
   /** Open leases (`open_run`), by run id. */
   readonly leases: Map<string, Queue.Queue<RunSignal, Cause.Done>>
+  /** Runs the panel started (ACP mode): only these can be attached to with `open_run({ mode: "acp" })`. */
+  readonly panelRuns: Set<string>
+  /** The worker's client of the broker's `AgentRpcs`. */
+  readonly agentClient: AgentClient
 
   constructor(fields: {
     welcomed: Deferred.Deferred<unknown>
@@ -95,6 +125,8 @@ export class FakeChrome {
     profile: ProfileId
     runs: Map<string, Run>
     leases: Map<string, Queue.Queue<RunSignal, Cause.Done>>
+    panelRuns: Set<string>
+    agentClient: AgentClient
   }) {
     this.welcomed = fields.welcomed
     this.host = fields.host
@@ -105,6 +137,17 @@ export class FakeChrome {
     this.profile = fields.profile
     this.runs = fields.runs
     this.leases = fields.leases
+    this.panelRuns = fields.panelRuns
+    this.agentClient = fields.agentClient
+  }
+
+  /**
+   * The panel presses Tidy up in ACP mode: the worker has created run `runId` (so the agent's MCP
+   * session may attach to it) and asks the broker to start the agent.
+   */
+  readonly startAgent = (runId: string, command: string, prefs: AgentPrefs = {}) => {
+    this.panelRuns.add(runId)
+    return this.agentClient("start_agent", { runId: runId as RunId, command, prefs })
   }
 
   /** The user presses Stop in this profile's panel. */
@@ -156,6 +199,8 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
     const profile = options.profile ?? PROFILE
     const runs = new Map<string, Run>()
     const leases = new Map<string, Queue.Queue<RunSignal, Cause.Done>>()
+    const panelRuns = new Set<string>()
+    const fromBroker = yield* Queue.unbounded<RpcFromServer>()
     const decoder = makeFrameDecoder()
     const decodeHostFrame = Schema.decodeUnknownOption(HostToExtension)
 
@@ -169,6 +214,7 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
           const frame = decodeHostFrame(message)
           if (Option.isNone(frame)) continue
           if (frame.value._tag === "Welcome") Deferred.doneUnsafe(welcomed, Exit.succeed(message))
+          else if (frame.value._tag === "FromBroker") Queue.offerUnsafe(fromBroker, frame.value.rpc)
           else {
             const rpc = frame.value.rpc
             workerLog.push(rpc._tag === "Request" ? `request ${rpc.tag}` : rpc._tag.toLowerCase())
@@ -205,9 +251,13 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
           ? options.readPages(payload) as Effect.Effect<never, ToolError>
           : Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => workerLog.push("worker interrupted read_pages")))),
       wake_and_read_pages: () => Effect.fail(new ToolError({ message: "asleep" })),
-      open_run: ({ id }) =>
+      open_run: ({ id, mode }) =>
         Stream.unwrap(Effect.gen(function*() {
           if (options.busy !== undefined) return yield* Effect.fail(options.busy)
+          // Like the worker: an ACP session attaches only to a run the panel started.
+          if (mode === "acp" && !panelRuns.has(id)) {
+            return yield* Effect.fail(new RunNotActive({ runId: id, message: "The side panel didn't start this tidy-up." }))
+          }
           const signals = yield* Queue.unbounded<RunSignal, Cause.Done>()
           leases.set(id, signals)
           yield* Effect.addFinalizer(() =>
@@ -241,13 +291,33 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
       Effect.forkScoped
     )
 
+    // The worker's client of the broker (ACP mode): `ToBroker` frames out, `FromBroker` frames in.
+    const agentProtocol = yield* RpcClient.Protocol.make((writeResponse, clientIds) =>
+      Effect.gen(function*() {
+        yield* Effect.forkScoped(Effect.forever(Effect.flatMap(Queue.take(fromBroker), (reply) =>
+          Effect.forEach(clientIds, (clientId) => writeResponse(clientId, reply as RpcMessage.FromServerEncoded), { discard: true }))))
+        return {
+          send: (_clientId, request) => Effect.asVoid(Queue.offer(stdin, frameOf({ _tag: "ToBroker", rpc: request }))),
+          supportsAck: true,
+          supportsTransferables: false,
+          codecFor: RpcSerialization.json.codecFor
+        }
+      })
+    )
+    const agentClient: AgentClient = yield* RpcClient.make(AgentRpcs, { flatten: true, disableTracing: true }).pipe(
+      Effect.provideService(RpcClient.Protocol, agentProtocol)
+    )
+
     const host = yield* runNativeHost({
       args: options.args ?? [EXTENSION_ORIGIN],
       location: options.location,
       pid: process.pid,
       companionVersion: "9.9.9",
-      helloTimeout: "2 seconds"
+      helloTimeout: "2 seconds",
+      ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
+      ...(options.env === undefined ? {} : { env: options.env })
     }).pipe(
+      Effect.provide(NodeChildProcessSpawner.layer.pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePathLayer.layer)))),
       Effect.provide(Layer.succeed(Stdio.Stdio)(Stdio.make({
         args: Effect.succeed([]),
         stdin: Stream.fromQueue(stdin),
@@ -262,5 +332,17 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
       : options.hello
     if (hello !== null) yield* Queue.offer(stdin, frameOf(hello))
 
-    return new FakeChrome({ welcomed, host, stdin, location: options.location, fromHost, workerLog, profile, runs, leases })
+    return new FakeChrome({
+      welcomed,
+      host,
+      stdin,
+      location: options.location,
+      fromHost,
+      workerLog,
+      profile,
+      runs,
+      leases,
+      panelRuns,
+      agentClient
+    })
   })

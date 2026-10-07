@@ -4,6 +4,7 @@
  */
 export const packageName = "@wherefore/core" as const
 
+export * from "./agent.ts"
 export * from "./broker.ts"
 export * from "./companion.ts"
 export * from "./ids.ts"

@@ -1,7 +1,8 @@
 # Wherefore companion
 
-A small Node program that lets local agents (Claude Code over MCP or ACP) reach your open tabs
-through the Wherefore extension. You only need it for those modes; API mode works without it.
+A small Node program that lets local agents (Claude Code over ACP or MCP) reach your open tabs
+through the Wherefore extension. You need it to tidy up with your Claude Code login (no API key);
+API-key mode works without it.
 
 Chrome starts it for the extension through
 [native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging).
@@ -46,6 +47,12 @@ starts the host. If you move the checkout, run `install` again; `status` reports
 Then reload the extension in `chrome://extensions`, or press **Check again** in its Settings.
 Settings → Companion should say "Connected".
 
+Run `install` from a terminal where `claude` and `npx` work (and where `CLAUDE_CONFIG_DIR` is
+set, if you use it): the wrapper copies that terminal's `PATH` and `CLAUDE_CONFIG_DIR`, and the
+agent the companion starts gets them. After pulling a new version, rebuild, run `install` again
+and reload the extension: the extension and the companion refuse each other's older versions
+(Settings says which one to update).
+
 ## Check it
 
 ```sh
@@ -58,6 +65,45 @@ lists where the host is registered and every live broker (one per connected Chro
 Brokers (one per connected Chrome profile), registered in /Users/you/.wherefore/run:
   k3jx...  pid 41235  extension 0.0.0  companion 0.0.0  since 10/6/2026, 9:41:02 PM
 ```
+
+## Claude Code from the side panel (ACP mode)
+
+With the companion connected, the side panel's **Tidy up** runs Claude Code on your own Claude Code
+login: no API key. First run offers it ("Tidy up my N tabs · Uses your Claude Code login"), and
+Settings → Connection switches between **Claude Code** and **Anthropic API key**.
+
+What happens when you press Tidy up:
+
+1. The extension creates the tidy-up and shows it at once ("Starting Claude Code…").
+2. The profile's broker starts the agent command, by default
+   `npx -y @agentclientprotocol/claude-agent-acp` (Claude Code over the
+   [Agent Client Protocol](https://agentclientprotocol.com)), in an empty folder,
+   `~/.wherefore/agent`. The first run downloads it, which can take a minute.
+3. The agent gets one MCP server, this CLI: `wherefore mcp --profile <this profile> --run <run id>`.
+   It sees only this profile's tabs, and its tidy-up is the one the panel created. Claude Code is
+   also asked for no built-in tools and no other MCP servers.
+4. The prompt is the same triage prompt API mode uses. Progress, questions and results show in the
+   panel as with any tidy-up.
+
+**What the agent may do.** Only Wherefore's five tools. The companion answers the agent's
+permission requests itself: Wherefore's tools are allowed (once), everything else (shell commands,
+file edits, web fetches, other MCP tools) is refused. Permission modes are never offered in
+Settings, and a session that starts in another mode (e.g. "bypass permissions" from your Claude
+Code settings) is put back to "default" first.
+
+**Model and effort.** Settings shows them as Claude Code offers them, after the first tidy-up
+(until then: Sonnet, medium effort). Your picks apply from the next tidy-up, and only while Claude
+Code still offers them.
+
+**Stop** cancels Claude Code's turn, then ends its whole process tree (`npx`, Node and Claude Code;
+`taskkill /T` on Windows). The tidy-up is stored as stopped.
+
+**Usage.** If Claude Code reports a cost, Settings' usage line shows it (at list prices; on a Claude
+plan it is included).
+
+**Another ACP agent.** Settings → Connection → Agent command takes any command that speaks ACP on
+stdio (words are split on spaces; quote paths with spaces; no other shell features). It runs with
+the companion's environment, and gets the same MCP server and the same permission guard.
 
 ## MCP mode (Claude Code)
 
@@ -147,6 +193,26 @@ run `install` again. Chrome also prints the host's stderr in its own log when st
 broker removes its socket and registry entry. If it was killed (Windows always kills hosts),
 the entry stays until the next `status` or broker start notices the process is gone.
 
+**"Claude Code isn't logged in."** Claude Code, started by the companion, found no login. Run
+`claude` once in a terminal and log in, then press Start again. If you keep
+your Claude Code login in another folder (`CLAUDE_CONFIG_DIR`), the companion must know it: run
+`install` again from a terminal where `CLAUDE_CONFIG_DIR` is set (`grep CLAUDE_CONFIG_DIR
+~/.wherefore/native-host.sh` shows what the wrapper has), then reload the extension.
+
+**"Wherefore couldn't start Claude Code: npx wasn't found."** The companion runs with the `PATH`
+it copied at `install`. Install Node.js (it comes with `npx`), run `install` again from a terminal
+where `npx --version` works, and reload the extension. For a custom agent command, the same goes
+for its program, or use an absolute path.
+
+**"Claude Code couldn't start the tidy-up: it exited with code …"** The command started but quit
+before it spoke ACP; the message ends with its last line of output. Run the command yourself
+(`npx -y @agentclientprotocol/claude-agent-acp`) to see the whole error. Behind a proxy, set
+`HTTPS_PROXY` before `install`, so npm can download it.
+
+**"Claude Code stopped unexpectedly"** or **"finished without saving the results".** The agent
+crashed or ended its turn without submitting. Press Start again. If it keeps happening, run the
+agent command in a terminal, or try Claude Code over MCP (below) to watch what it does.
+
 **Claude Code says "Open Chrome with Wherefore".** No broker is running: Chrome is closed, the
 extension isn't loaded, or the companion isn't connected (Settings → Companion). After rebuilding
 the companion, reload the extension so Chrome starts the new broker; `status` lists the live ones.
@@ -162,3 +228,6 @@ pnpm -C packages/companion test       # unit and broker tests
 pnpm -C packages/companion build      # bundle dist/cli.js (rolldown)
 pnpm -C packages/companion smoke      # drive dist/cli.js like Chrome would, no browser needed
 ```
+
+ACP mode is tested with a fake ACP agent (`test/fakeAgent.ts`, a real process speaking ACP through
+the SDK's agent side); the tests and the smoke script never run the real `claude-agent-acp`.

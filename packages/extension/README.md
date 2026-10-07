@@ -10,7 +10,7 @@ The Wherefore Chrome extension (MV3, built with [WXT](https://wxt.dev)). See [ar
 2. Click the toolbar icon. The side panel asks for an Anthropic API key ([console.anthropic.com](https://console.anthropic.com/settings/keys)). It stays in `chrome.storage.local`; Settings shows only its last four characters.
 3. **Tidy up** reads your open tabs (titles and redacted URLs; page text only when the model asks, never for mail, chat, consoles or sign-in pages), may ask a question or two, then shows the results. **Save N and close M tabs** saves them to Your list and closes the tabs; **Undo** in the toast brings everything back.
 4. On Your list, **Open** brings an item's tabs back as a tab group; **Done** closes them and moves the item to the Done archive.
-5. Optional (M2, for MCP and ACP modes): install the companion (`packages/companion/README.md`). The worker connects to it at startup and keeps the connection open; Settings → Companion shows its state, with **Check again** after installing.
+5. Without an API key: install the companion (`packages/companion/README.md`). With it connected, first run offers **Tidy up my N tabs · Uses your Claude Code login**: the companion starts Claude Code (ACP) on your own login, and its progress, questions and results show in the panel like any tidy-up. Settings → Connection switches between Claude Code and an API key, and shows Claude Code's model and effort after its first run. The worker connects to the companion at startup and keeps the connection open; Settings → Companion shows its state, with **Check again** after installing. The companion also serves Claude Code over MCP (you ask Claude Code; the panel follows).
 
 ## Build and load
 
@@ -37,7 +37,7 @@ Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → `p
 | `src/background/TabTools.ts` | List, read and wake tabs; close with undo; reopen an item as a tab group |
 | `src/background/Store.ts` | Storage writes: versioned keys, migrations, backups of unreadable values |
 | `src/background/handlers.ts` | `WorkerRpcs` (from core) implemented and served |
-| `src/companion/` | The worker's one native port to the companion: `NativeConnector` (the `connectNative` seam), `CompanionLink` (handshake, serving the tab tools to the broker, reconnects, status) |
+| `src/companion/` | The worker's one native port to the companion: `NativeConnector` (the `connectNative` seam), `CompanionLink` (handshake, serving the tab tools to the broker, calling the broker to start ACP agents, reconnects, status), `CompanionRuns` (MCP leases, ACP runs the worker owns, questions, Stop) |
 | `src/store/` | Store keys, decoding + migration, `StoreReader` (read and watch, for views) |
 | `src/messaging/` | Page <-> worker RPC over a `chrome.runtime` Port: protocol, worker server, `WorkerClient` |
 | `src/agent/` | The API-mode agent: `TriageAgent` (the tool loop and run persistence), `ModelClient` (Anthropic via `effect/ai`), `Questions` (how `ask_user` reaches the UI), `ModelError` |

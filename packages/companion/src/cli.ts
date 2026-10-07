@@ -7,16 +7,18 @@
  * - `native-host`: what Chrome runs. It is dispatched before the CLI parser, because Chrome
  *   passes arguments the parser doesn't know (the caller's origin, `--parent-window=<n>` on
  *   Windows) and because nothing but native-messaging frames may reach stdout.
- * - `mcp [--profile <id>]`: the MCP server on stdio (src/mcp/), for agents like Claude Code. Every
- *   connected Chrome profile, or only `--profile`'s (what an ACP run uses, PR C). Stdout is the
+ * - `mcp [--profile <id> [--run <run id>]]`: the MCP server on stdio (src/mcp/), for agents like
+ *   Claude Code. Every connected Chrome profile, or only `--profile`'s. `--run` is what an ACP run
+ *   passes its agent (src/acp/): the session's runs are `acp`, and its tidy-up attaches to that
+ *   run, which the side panel created and the worker holds, instead of opening one. Stdout is the
  *   MCP channel: everything else goes to stderr.
- *
- * The ACP pieces (PR C) arrive later.
+ * - The ACP agent itself is started by the broker when the panel asks (`start_agent`, src/acp/).
  */
 import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { EXTENSION_ORIGIN, NATIVE_HOST_NAME, ProfileId } from "@wherefore/core"
+import { EXTENSION_ORIGIN, NATIVE_HOST_NAME, ProfileId, RunId } from "@wherefore/core"
 import { Cause, Console, Data, Duration, Effect, Exit, Layer, Logger, Option, Runtime, Schema } from "effect"
+import { RUN_ID_PATTERN } from "./acp/command.ts"
 import { connectBroker } from "./broker/BrokerClient.ts"
 import { callerOf, runNativeHost } from "./broker/nativeHost.ts"
 import { liveDeps, makeRegistry } from "./broker/registry.ts"
@@ -142,8 +144,12 @@ const mcp = Command.make("mcp", {
   profile: Flag.String("profile").pipe(
     Flag.withDescription("Serve only this Chrome profile's tabs (its id, from `status`)"),
     Flag.optional
+  ),
+  run: Flag.String("run").pipe(
+    Flag.withDescription("ACP mode: attach to this run, which the side panel started (needs --profile)"),
+    Flag.optional
   )
-}, ({ profile }) =>
+}, ({ profile, run }) =>
   Effect.gen(function*() {
     // Stdout is the MCP channel.
     console.log = console.error
@@ -156,10 +162,19 @@ const mcp = Command.make("mcp", {
       yield* Console.error(message)
       return yield* new UsageError({ message })
     }
+    const runId = Option.getOrUndefined(run)
+    if (runId !== undefined && (scoped === undefined || !RUN_ID_PATTERN.test(runId))) {
+      const message = scoped === undefined
+        ? "wherefore mcp: --run needs --profile (the run belongs to one Chrome profile)."
+        : `wherefore mcp: "${runId}" isn't a run id.`
+      yield* Console.error(message)
+      return yield* new UsageError({ message })
+    }
     yield* serveMcp({
       version: COMPANION_VERSION,
       entries: makeRegistry(liveDeps(location())).entries,
-      profile: scoped
+      profile: scoped,
+      acp: runId === undefined ? undefined : { runId: RunId.make(runId) }
     })
   })).pipe(Command.withDescription("Serve your tabs to an MCP client (e.g. Claude Code) over stdio"))
 
@@ -201,6 +216,8 @@ if (args[0] === "native-host" || callerOf(args.slice(0, 1)) !== undefined) {
     ),
     Effect.tapDefect((defect) => Console.error(`wherefore native-host crashed: ${String(defect)}`)),
     Effect.provide(NodeStdio.layer),
+    // The ACP agents it starts (src/acp/).
+    Effect.provide(NodeChildProcessSpawner.layer.pipe(Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))),
     Effect.provide(Layer.succeed(Logger.LogToStderr)(true))
   )
   NodeRuntime.runMain(program, {
