@@ -11,14 +11,16 @@
  */
 import { Data, DateTime, Option, Schema } from "effect"
 import { SavedItemId } from "./ids.ts"
-import type { IntentionKind } from "./intention.ts"
+import { Due, type IntentionKind } from "./intention.ts"
 
-export const TrackerType = Schema.Literals(["todo", "follow_up", "read", "keep"])
-export type TrackerType = typeof TrackerType.Type
+/** What kind of thing an item is, shown as a tag next to its title. From the intention kind (`dispositionOf`). */
+export const ItemTag = Schema.Literals(["do", "track", "decide", "read", "keep"])
+export type ItemTag = typeof ItemTag.Type
 
-export const trackerTypeLabel: { readonly [T in TrackerType]: string } = {
-  todo: "To do",
-  follow_up: "Follow up",
+export const tagLabel: { readonly [T in ItemTag]: string } = {
+  do: "Do",
+  track: "Track",
+  decide: "Decide",
   read: "Read",
   keep: "Keep"
 }
@@ -41,12 +43,16 @@ const DateTimeUtc = Schema.DateTimeUtcFromString
 
 export const SavedItem = Schema.Struct({
   id: SavedItemId,
-  type: TrackerType,
+  tag: ItemTag,
+  /** A few words to list it by: the model's `short_title`, else the intention's title. */
+  title: Schema.NonEmptyString,
   /** The one-line task. Starts as the model's `next_step` (or the intention's title); the user can edit it. */
   task: Schema.NonEmptyString,
   /** The intention's title. */
   intention: Schema.String,
   why: Schema.String,
+  /** The date the pages gave for it, if any. `source` is page text, quoted by the model. */
+  due: Schema.optionalKey(Due),
   tabs: Schema.Array(SavedTab).check(Schema.isMinLength(1)),
   status: SavedItemStatus,
   savedAt: DateTimeUtc,
@@ -62,8 +68,8 @@ export type SavedItem = typeof SavedItem.Type
 
 /** What an intention's tabs become after review. */
 export type Disposition = Data.TaggedEnum<{
-  /** Save as a tracker item, then close the tabs. */
-  Save: { readonly type: TrackerType }
+  /** Save as an item with this tag, then close the tabs. */
+  Save: { readonly tag: ItemTag }
   /** Nothing left to do: close the tabs (done and dead). */
   Close: {}
   /** An everyday tool or inbox: leave it open, save nothing. */
@@ -74,14 +80,15 @@ export const Disposition = Data.taggedEnum<Disposition>()
 export const dispositionOf = (kind: IntentionKind): Disposition => {
   switch (kind) {
     case "work":
-    case "decide":
-      return Disposition.Save({ type: "todo" })
+      return Disposition.Save({ tag: "do" })
     case "track":
-      return Disposition.Save({ type: "follow_up" })
+      return Disposition.Save({ tag: "track" })
+    case "decide":
+      return Disposition.Save({ tag: "decide" })
     case "read":
-      return Disposition.Save({ type: "read" })
+      return Disposition.Save({ tag: "read" })
     case "reference":
-      return Disposition.Save({ type: "keep" })
+      return Disposition.Save({ tag: "keep" })
     case "done":
     case "dead":
       return Disposition.Close()
@@ -93,14 +100,17 @@ export const dispositionOf = (kind: IntentionKind): Disposition => {
 /** The intention fields a saved item is made from. */
 export interface SavableIntention {
   readonly title: string
+  readonly shortTitle?: string
   readonly why: string
   readonly nextStep?: string
+  readonly due?: Due
   readonly kind: IntentionKind
 }
 
 /**
  * A new, open saved item for an intention; `None` for kinds that aren't saved (done, dead, app).
- * The task is the model's `next_step`, falling back to the intention's title.
+ * The task is the model's `next_step`, and the title its `short_title`; both fall back to the
+ * intention's title.
  */
 export const newSavedItem = (input: {
   readonly id: SavedItemId
@@ -110,13 +120,17 @@ export const newSavedItem = (input: {
 }): Option.Option<SavedItem> => {
   const disposition = dispositionOf(input.intention.kind)
   if (disposition._tag !== "Save") return Option.none()
-  const nextStep = input.intention.nextStep?.trim() ?? ""
+  const { intention } = input
+  const nextStep = intention.nextStep?.trim() ?? ""
+  const shortTitle = intention.shortTitle?.trim() ?? ""
   return Option.some({
     id: input.id,
-    type: disposition.type,
-    task: nextStep !== "" ? nextStep : input.intention.title,
-    intention: input.intention.title,
-    why: input.intention.why,
+    tag: disposition.tag,
+    title: shortTitle !== "" ? shortTitle : intention.title,
+    task: nextStep !== "" ? nextStep : intention.title,
+    intention: intention.title,
+    why: intention.why,
+    ...(intention.due === undefined ? {} : { due: intention.due }),
     tabs: input.tabs,
     status: "open",
     savedAt: input.savedAt

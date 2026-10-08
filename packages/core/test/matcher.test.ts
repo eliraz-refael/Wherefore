@@ -9,7 +9,8 @@ const item = (
 ) =>
   decodeOk(SavedItem, {
     id,
-    type: "todo",
+    tag: "do",
+    title: `Title ${id}`,
     task: `Task ${id}`,
     intention: `Intention ${id}`,
     why: "",

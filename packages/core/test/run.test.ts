@@ -77,6 +77,30 @@ describe("Run", () => {
   })
 })
 
+describe("Run stored before short titles and dates", () => {
+  it("still decodes: its intentions have neither, and encode back unchanged", () => {
+    const old = {
+      ...wireRun,
+      status: "succeeded",
+      finishedAt: "2026-10-05T09:01:00.000Z",
+      intentions: [{
+        id: "run-1:0",
+        title: "Finish reviewing the auth PR",
+        why: "Review requested yesterday",
+        nextStep: "Approve or request changes on #412",
+        kind: "work",
+        tabIds: [11],
+        confidence: "high",
+        evidence: "PR open"
+      }]
+    }
+    const run = decodeOk(Run, old)
+    expect(run.intentions[0]?.shortTitle).toBeUndefined()
+    expect(run.intentions[0]?.due).toBeUndefined()
+    expect(encodeOk(Run, run)).toEqual(old)
+  })
+})
+
 describe("upsertRunIndex", () => {
   const entry = (id: string, status: RunIndexEntry["status"] = "running"): RunIndexEntry => ({ id: RunId.make(id), status })
 

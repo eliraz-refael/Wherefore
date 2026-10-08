@@ -53,6 +53,31 @@ describe("SubmittedIntention", () => {
     expect(encodeOk(SubmittedIntention, intention)).not.toHaveProperty("next_step")
   })
 
+  it("carries an optional short_title and a due date the pages gave", () => {
+    const wire = {
+      ...wireIntention,
+      short_title: "School registration + bills",
+      due: { date: "2026-10-12", kind: "due", source: "Registration closes 12 October" }
+    }
+    const intention = decodeOk(SubmittedIntention, wire)
+    expect(intention.shortTitle).toBe("School registration + bills")
+    expect(intention.due).toEqual({ date: "2026-10-12", kind: "due", source: "Registration closes 12 October" })
+    expect(encodeOk(SubmittedIntention, intention)).toEqual(wire)
+    expect(decodeOk(SubmittedIntention, wireIntention)).not.toHaveProperty("due")
+  })
+
+  it("accepts only real calendar dates, past ones too", () => {
+    const due = (date: string, kind = "event") => ({ ...wireIntention, due: { date, kind, source: "x" } })
+    for (const date of ["2026-10-16", "2024-02-29", "2020-01-01"]) {
+      expect(rejects(SubmittedIntention, due(date))).toBe(false)
+    }
+    for (const date of ["2026-02-30", "2025-02-29", "2026-13-01", "2026-00-10", "2026-10-1", "12/10/2026", "2026-10-12T10:00", ""]) {
+      expect(rejects(SubmittedIntention, due(date))).toBe(true)
+    }
+    expect(rejects(SubmittedIntention, due("2026-10-12", "deadline"))).toBe(true)
+    expect(rejects(SubmittedIntention, { ...wireIntention, due: { date: "2026-10-12", kind: "due" } })).toBe(true)
+  })
+
   it("rejects bad input", () => {
     expect(rejects(SubmittedIntention, { ...wireIntention, tab_ids: [] })).toBe(true)
     expect(rejects(SubmittedIntention, { ...wireIntention, tab_ids: [-3] })).toBe(true)
@@ -65,6 +90,7 @@ describe("SubmittedIntention", () => {
     // camelCase is the domain form, not the wire form
     const { tab_ids: __, ...withoutTabIds } = wireIntention
     expect(rejects(SubmittedIntention, { ...withoutTabIds, tabIds: [11] })).toBe(true)
+    expect(decodeOk(SubmittedIntention, { ...wireIntention, shortTitle: "x" })).not.toHaveProperty("shortTitle")
   })
 })
 

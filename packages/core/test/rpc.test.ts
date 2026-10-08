@@ -103,7 +103,8 @@ describe("RemovedItem", () => {
     const stored = {
       item: {
         id: "item-1",
-        type: "read",
+        tag: "read",
+        title: "OAuth RFC",
         task: "Read the RFC",
         intention: "Read the RFC",
         why: "",

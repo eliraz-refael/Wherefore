@@ -72,9 +72,12 @@ const problems = (node: unknown, path: string, defs: Readonly<Record<string, unk
 const validate = (schema: JsonSchema.JsonSchema): Array<string> =>
   problems(schema, "#", isRecord(schema["$defs"]) ? schema["$defs"] : {})
 
-/** Rebuilds a runtime schema from a generated JSON Schema, to check it accepts and rejects what it should. */
+/**
+ * Rebuilds a runtime schema from a generated JSON Schema, to check it accepts and rejects what it
+ * should. The schemas are ours, so their patterns are applied.
+ */
 const fromJsonSchema = (schema: JsonSchema.JsonSchema) =>
-  SchemaRepresentation.fromJsonSchemaDocument(JsonSchema.fromSchemaDraft2020_12(schema))
+  SchemaRepresentation.fromJsonSchemaDocument(JsonSchema.fromSchemaDraft2020_12(schema), { patterns: "apply" })
 
 const accepts = (schema: Schema.Top, value: unknown): boolean =>
   Exit.isSuccess(Schema.decodeUnknownExit(Schema.toType(schema))(value))
@@ -113,9 +116,16 @@ const samples: Record<TriageToolName, { readonly good: ReadonlyArray<unknown>; r
     ]
   },
   submit_intentions: {
-    good: [{ intentions: [intention] }, { intentions: [{ ...intention, next_step: undefined, kind: "dead" }] }],
+    good: [
+      { intentions: [intention] },
+      { intentions: [{ ...intention, next_step: undefined, kind: "dead" }] },
+      { intentions: [{ ...intention, short_title: "Auth PR #412", due: { date: "2026-10-12", kind: "due", source: "Due 12 Oct" } }] }
+    ],
     bad: [{ intentions: [] }, { intentions: [{ ...intention, kind: "shopping" }] }, { intentions: [{ ...intention, tab_ids: [] }] },
-      { intentions: [{ ...intention, confidence: 1 }] }]
+      { intentions: [{ ...intention, confidence: 1 }] },
+      { intentions: [{ ...intention, due: { date: "12/10/2026", kind: "due", source: "Due 12 Oct" } }] },
+      { intentions: [{ ...intention, due: { date: "2026-10-12", kind: "soon", source: "Due 12 Oct" } }] },
+      { intentions: [{ ...intention, due: { date: "2026-10-12", kind: "due" } }] }]
   }
 }
 // JSON drops undefined, as the wire would.
@@ -183,6 +193,8 @@ describe("tool JSON Schemas", () => {
     const intentionSchema = JSON.stringify(input("submit_intentions"))
     expect(intentionSchema).toContain("\"next_step\"")
     expect(intentionSchema).toContain("\"tab_ids\"")
+    expect(intentionSchema).toContain("\"short_title\"")
+    expect(intentionSchema).not.toContain("shortTitle")
     expect(intentionSchema).not.toContain("nextStep")
     expect(intentionSchema).not.toContain("tabIds")
   })
@@ -191,6 +203,9 @@ describe("tool JSON Schemas", () => {
     const intentionSchema = JSON.stringify(input("submit_intentions"))
     expect(intentionSchema).toContain("Action-oriented, specific.")
     expect(intentionSchema).toContain("The one-line task the person would write")
+    expect(intentionSchema).toContain("2–6 words, no leading verb")
+    expect(intentionSchema).toContain("Never guess one or infer it from habits")
+    expect(intentionSchema).toContain("\"pattern\":\"^\\\\d{4}-\\\\d{2}-\\\\d{2}$\"")
     expect(JSON.stringify(input("ask_user"))).toContain("2-4 likely answers")
   })
 

@@ -24,16 +24,59 @@ export type Confidence = typeof Confidence.Type
 
 const TabIds = Schema.Array(TabId).check(Schema.isMinLength(1))
 
+const isCalendarDate = (value: string): boolean => {
+  const [year = 0, month = 0, day = 0] = value.split("-").map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+/** A day on the calendar, `YYYY-MM-DD`, with no time or time zone: "2026-10-12". */
+export const CalendarDate = Schema.String.check(
+  Schema.makeFilter((value: string) => isCalendarDate(value) || "not a calendar date"),
+  // Last, so a description annotated onto the schema reaches its JSON Schema.
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/)
+)
+
+export const DueKind = Schema.Literals(["due", "event", "renews", "expires", "starts"])
+export type DueKind = typeof DueKind.Type
+
+/**
+ * A date the pages give for an intention: a deadline, an event, a renewal. `source` is the
+ * model's quote of the page (text from the web): show it as text, never as markup.
+ */
+export const Due = Schema.Struct({
+  date: CalendarDate.annotate({
+    description:
+      "YYYY-MM-DD. Resolve relative dates (\"this Sunday\", \"in 3 days\") against today's date. A past date is fine: it is overdue."
+  }),
+  kind: DueKind.annotate({
+    description:
+      "due: a deadline. event: when it happens. renews: a subscription renews. expires: an offer, trial or document runs out. starts: when something begins."
+  }),
+  source: Schema.String.annotate({
+    description: "The short phrase the date came from, e.g. \"Registration closes 12 October\"."
+  })
+})
+export type Due = typeof Due.Type
+
 const intentionFields = {
   title: Schema.NonEmptyString.annotate({
     description: "Action-oriented, specific. \"Decide which cat litter to buy\", not \"Shopping\"."
   }),
+  shortTitle: Schema.optionalKey(Schema.String.annotate({
+    description:
+      "2–6 words, no leading verb (the list shows the kind as a tag): \"School registration + bills\", \"Eventer tickets\", \"PR #12 · companion ACP fixes\". Give one for work, track, decide, read and reference."
+  })),
   why: Schema.String.annotate({
     description: "The user's reason for keeping these tabs open, in one sentence."
   }),
   nextStep: Schema.optionalKey(Schema.String.annotate({
     description:
       "The one-line task the person would write on their own to-do list, e.g. \"Reply to Dana about the API limits\". Give one for work, track, decide and read; omit it otherwise."
+  })),
+  due: Schema.optionalKey(Due.annotate({
+    description:
+      "Only when a tab's title or page text states a date for this intention. Never guess one or infer it from habits. Omit it otherwise."
   })),
   kind: IntentionKind,
   tabIds: TabIds,
@@ -45,7 +88,7 @@ const intentionFields = {
 
 /** An intention as the model submits it through `submit_intentions`. */
 export const SubmittedIntention = Schema.Struct(intentionFields).pipe(
-  Schema.encodeKeys({ nextStep: "next_step", tabIds: "tab_ids" })
+  Schema.encodeKeys({ shortTitle: "short_title", nextStep: "next_step", tabIds: "tab_ids" })
 )
 export type SubmittedIntention = typeof SubmittedIntention.Type
 
