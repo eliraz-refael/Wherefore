@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url"
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js")
 const fakeAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "test", "fakeAgent.ts")
-const PROTOCOL = 2
+const PROTOCOL = 3
 const ORIGIN = "chrome-extension://anpbbaiepneaddgoldgmapilgiflochg/"
 const PROFILE = "smokesmokesmokesmokesmokes"
 // A short directory: Unix socket paths are limited to about 100 bytes, and macOS's tmpdir is long.
@@ -101,7 +101,8 @@ try {
           tabs: [
             { id: 7, window: 1, index: 0, title: "Smoke", url: "https://example.com/" },
             { id: 8, window: 1, index: 1, title: "Sign in", url: "https://example.com/login" }
-          ]
+          ],
+          today: "2026-10-08 (Thu)"
         }
       })
     } else if (rpc._tag === "Request" && rpc.tag === "open_run") {
@@ -186,8 +187,10 @@ try {
   check(toolNames === "list_tabs,read_pages,wake_and_read_pages,ask_user,submit_intentions", `mcp: tools ${toolNames}`)
   check((await rpcCall("prompts/list")).result.prompts.some((prompt) => prompt.name === "tidy_up"), "mcp: the tidy_up prompt")
   const tool = async (name, args = {}) => (await rpcCall("tools/call", { name, arguments: args })).result
-  const listedTabs = (await tool("list_tabs")).structuredContent?.tabs ?? []
+  const listedResult = (await tool("list_tabs")).structuredContent
+  const listedTabs = listedResult?.tabs ?? []
   check(listedTabs.length === 2 && listedTabs.every((tab) => tab.id !== 7 && tab.id !== 8), "mcp: list_tabs through the broker, with session ids")
+  check(listedResult?.today === "2026-10-08 (Thu)", "mcp: list_tabs passes on the day the extension reported")
   const [smokeTab, loginTab] = listedTabs.map((tab) => tab.id)
   const intention = (title, ids, kind) => ({ title, why: "w", kind, tab_ids: ids, confidence: "high", evidence: "e" })
   const rejected = await tool("submit_intentions", { intentions: [intention("Smoke", [smokeTab], "read")] })

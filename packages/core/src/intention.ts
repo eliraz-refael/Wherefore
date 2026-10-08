@@ -47,7 +47,7 @@ export type DueKind = typeof DueKind.Type
 export const Due = Schema.Struct({
   date: CalendarDate.annotate({
     description:
-      "YYYY-MM-DD. Resolve relative dates (\"this Sunday\", \"in 3 days\") against today's date. A past date is fine: it is overdue."
+      "YYYY-MM-DD. Resolve relative dates (\"this Sunday\", \"in 3 days\") against the date list_tabs reports as today. A past date is fine: it is overdue."
   }),
   kind: DueKind.annotate({
     description:

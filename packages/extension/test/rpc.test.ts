@@ -35,12 +35,14 @@ describe("panel <-> worker RPC", () => {
     const harness = new Harness(tabs())
     return withClient(harness, (client) =>
       Effect.gen(function*() {
-        const { tabs: listed } = yield* client.call("list_tabs", {})
+        const { tabs: listed, today } = yield* client.call("list_tabs", {})
         expect(listed.map((tab) => tab.url)).toEqual([
           "https://keep.example/",
           "https://github.com/acme/api/pull/412?token=REDACTED",
           "https://slow.example/"
         ])
+        // The worker reports the user's local day with every list (core `localDay`).
+        expect(today).toMatch(/^\d{4}-\d{2}-\d{2} \((Sun|Mon|Tue|Wed|Thu|Fri|Sat)\)$/)
 
         const [item] = Schema.decodeUnknownSync(itemsKey.schema)([storedItem])
         assert(item !== undefined)

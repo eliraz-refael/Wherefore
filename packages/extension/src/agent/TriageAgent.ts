@@ -389,8 +389,7 @@ const make = Effect.gen(function*() {
       const conversation = yield* models.converse({ settings: ctx.settings, system: SYSTEM_PROMPT, handlers }).pipe(
         Effect.mapError((error) => new RunFailure({ error: toRunError(error) }))
       )
-      const today = new Date(yield* Clock.currentTimeMillis).toDateString()
-      let userText: string | undefined = apiKickoff({ today, tabs: listed.tabs })
+      let userText: string | undefined = apiKickoff({ today: listed.today, tabs: listed.tabs })
       let reminders = 0
       for (let turns = 0;; turns++) {
         if (turns >= ctx.maxTurns) {

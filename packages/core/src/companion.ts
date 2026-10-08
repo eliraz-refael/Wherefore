@@ -38,8 +38,9 @@ export const NATIVE_HOST_NAME = "io.github.eliraz_refael.wherefore"
 /**
  * Bumped when the frames below change incompatibly. Both sides refuse a different version.
  * 2 (M2 PR C): `ToBroker`/`FromBroker`, so a broker that can't start agents says so at the handshake.
+ * 3: `list_tabs` results carry `today`, which the companion forwards to its agents.
  */
-export const NATIVE_PROTOCOL_VERSION = 2
+export const NATIVE_PROTOCOL_VERSION = 3
 
 /** Chrome's limit on one message from a native host to the extension (1 MB). */
 export const NATIVE_MESSAGE_MAX_BYTES = 1024 * 1024

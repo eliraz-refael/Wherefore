@@ -121,6 +121,8 @@ describe("TriageAgent", () => {
         expect(system.options).toMatchObject({ anthropic: { cacheControl: { type: "ephemeral" } } })
         const kickoff = lastUserText(first)
         expect(kickoff).toContain("Here are my 3 open tabs")
+        // The date list_tabs reported, so the kickoff and the tool result agree.
+        expect(kickoff).toMatch(/^Today is \d{4}-\d{2}-\d{2} \((Sun|Mon|Tue|Wed|Thu|Fri|Sat)\)\. /)
         expect(kickoff).toContain('"title":"Desk B"')
         expect(kickoff).toContain('"asleep":true')
 

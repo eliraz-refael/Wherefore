@@ -92,6 +92,9 @@ export type AgentClient = (
 
 export const NO_PANEL = "The Wherefore side panel isn't open in this Chrome profile, so the user can't see the questions."
 
+/** The day the fake worker reports with every tab list, as the real one does (core `localDay`). */
+export const FAKE_TODAY = "2026-10-08 (Thu)"
+
 export const sampleTabs = [
   { id: 1, window: 1, index: 0, title: "PR", url: "https://github.com/acme/api/pull/1", active: true }
 ]
@@ -245,7 +248,9 @@ export const startFakeChrome = (options: FakeChromeOptions): Effect.Effect<FakeC
     )
     const handlers = CompanionWorkerRpcs.toLayer(CompanionWorkerRpcs.of({
       list_tabs: () =>
-        (options.listTabs ?? Effect.succeed({ tabs: sampleTabs })) as Effect.Effect<never, ToolError>,
+        (options.listTabs ?? Effect.succeed({ tabs: sampleTabs })).pipe(
+          Effect.map((listed) => ({ today: FAKE_TODAY, ...(listed as object) }))
+        ) as Effect.Effect<never, ToolError>,
       read_pages: (payload) =>
         options.readPages !== undefined
           ? options.readPages(payload) as Effect.Effect<never, ToolError>

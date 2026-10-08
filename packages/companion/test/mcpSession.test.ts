@@ -57,7 +57,7 @@ class FakeProfile {
   constructor(readonly profileId: ProfileId, readonly options: FakeOptions = {}) {
     const self = this
     const handlers: Record<string, (payload: any) => Effect.Effect<unknown, unknown>> = {
-      list_tabs: () => Effect.succeed({ tabs: tabsOf(profileId === WORK ? "work" : "home") }),
+      list_tabs: () => Effect.succeed({ tabs: tabsOf(profileId === WORK ? "work" : "home"), today: "2026-10-08 (Thu)" }),
       read_pages: ({ tabIds }) => options.readPages?.(tabIds) ?? Effect.succeed({ pages: tabIds.map(page) }),
       ask_panel: ({ questions }) => options.askPanel?.(questions) ?? Effect.never,
       update_run: ({ run }: { run: Run }) =>

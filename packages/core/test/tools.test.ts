@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Context, Exit, JsonSchema, Schema, SchemaRepresentation } from "effect"
-import { type ToolJsonSchema, TriageToolkit, type TriageToolName, toolJsonSchemas } from "../src/index.ts"
+import { localDay, type ToolJsonSchema, TriageToolkit, type TriageToolName, toolJsonSchemas } from "../src/index.ts"
 import { Tool } from "../src/unstable.ts"
 
 const schemas = toolJsonSchemas()
@@ -226,5 +226,35 @@ describe("tool JSON Schemas", () => {
 
   it("are stable", async () => {
     await expect(`${JSON.stringify(schemas, null, 2)}\n`).toMatchFileSnapshot("./__snapshots__/tool-json-schemas.json")
+  })
+})
+
+describe("localDay", () => {
+  /** Node's environment (core's tsconfig has no Node types). */
+  const env = (globalThis as unknown as { readonly process: { readonly env: Record<string, string | undefined> } }).process.env
+
+  /** Runs `f` with the process in time zone `tz` (Node applies a TZ change at once). */
+  const inZone = <A>(tz: string, f: () => A): A => {
+    const before = env["TZ"]
+    env["TZ"] = tz
+    try {
+      return f()
+    } finally {
+      if (before === undefined) delete env["TZ"]
+      else env["TZ"] = before
+    }
+  }
+
+  it("is the user's local day and weekday, not UTC's", () => {
+    // 11:30 UTC on Thu 8 Oct is 00:30 on Fri 9 Oct in Auckland (UTC+13).
+    const afterAucklandMidnight = Date.parse("2026-10-08T11:30:00.000Z")
+    expect(inZone("Pacific/Auckland", () => localDay(afterAucklandMidnight))).toBe("2026-10-09 (Fri)")
+    expect(inZone("UTC", () => localDay(afterAucklandMidnight))).toBe("2026-10-08 (Thu)")
+    // 05:00 UTC on Thu 8 Oct is still Wed 7 Oct, 22:00, in Los Angeles.
+    expect(inZone("America/Los_Angeles", () => localDay(Date.parse("2026-10-08T05:00:00.000Z")))).toBe("2026-10-07 (Wed)")
+  })
+
+  it("pads month and day", () => {
+    expect(inZone("UTC", () => localDay(Date.parse("2026-01-04T12:00:00.000Z")))).toBe("2026-01-04 (Sun)")
   })
 })
