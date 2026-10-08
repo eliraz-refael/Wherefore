@@ -20,7 +20,8 @@ const tabs = () =>
 
 const storedItem = {
   id: "item-1",
-  type: "todo",
+  tag: "do",
+  title: "Auth PR",
   task: "Review the auth PR",
   intention: "Finish reviewing the auth PR",
   why: "Review requested",
@@ -44,7 +45,7 @@ describe("panel <-> worker RPC", () => {
         const [item] = Schema.decodeUnknownSync(itemsKey.schema)([storedItem])
         assert(item !== undefined)
         yield* client.call("save_items", { items: [item] })
-        expect(harness.chrome.local.get("items")).toEqual({ version: 1, data: [storedItem] })
+        expect(harness.chrome.local.get("items")).toEqual({ version: 2, data: [storedItem] })
 
         const missing = yield* Effect.flip(client.call("mark_done", { id: "nope" as typeof item.id }))
         expect(missing).toMatchObject({ _tag: "ItemNotFound", id: "nope" })

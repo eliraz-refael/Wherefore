@@ -2,7 +2,7 @@
  * The Tidy up results screen as data: a finished run's intentions, the tabs open now and the
  * user's list, turned into what the screen shows and what "Save N and close M tabs" does. Pure.
  *
- * Smart defaults (canvas v6): every result is saved under its kind's type (core `dispositionOf`)
+ * Smart defaults (canvas v6): every result is saved under its kind's tag (core `dispositionOf`)
  * and its tabs close; finished and dead tabs close; everyday apps stay open; tabs that are already
  * in an item on the list close without a second copy. Pinned tabs never close in bulk.
  */
@@ -10,14 +10,14 @@ import {
   dispositionOf,
   domainOf,
   type Intention,
+  type ItemTag,
   matchSavedTabs,
   newSavedItem,
   type Run,
   type SavedItem,
   type SavedItemId,
   type SavedTab,
-  type TabId,
-  type TrackerType
+  type TabId
 } from "@wherefore/core"
 import { type DateTime, Option } from "effect"
 import { displayDomain } from "./format.ts"
@@ -38,8 +38,8 @@ export interface ReviewTab {
 /** An intention to save: a "result" on the screen. */
 export interface ReviewResult {
   readonly intention: Intention
-  /** The type its kind maps to (core `dispositionOf`). */
-  readonly type: TrackerType
+  /** The tag its kind maps to (core `dispositionOf`). */
+  readonly tag: ItemTag
   readonly tabs: ReadonlyArray<ReviewTab>
   /** Low confidence. The screen says "Not sure" (and never shows the confidence itself). */
   readonly unsure: boolean
@@ -65,7 +65,7 @@ export interface ReviewModel {
 /** What the user changed on one result. */
 export interface ResultChoice {
   readonly task?: string
-  readonly type?: TrackerType
+  readonly tag?: ItemTag
   /** "Keep these tabs open": not saved, tabs stay. */
   readonly keepOpen?: boolean
   /** Already saved on its own ("Save just this"): the item's id. */
@@ -142,7 +142,7 @@ export const buildReview = (input: {
         const fresh = tabs.filter((tab) => !onListIds.has(tab.id))
         // Every tab is in an item already: nothing new to save.
         if (disposition._tag !== "Save" || fresh.length === 0) break
-        results.push({ intention, type: disposition.type, tabs: fresh, unsure: intention.confidence === "low" })
+        results.push({ intention, tag: disposition.tag, tabs: fresh, unsure: intention.confidence === "low" })
       }
     }
   }
@@ -167,7 +167,7 @@ export const taskOf = (result: ReviewResult, choice: ResultChoice | undefined): 
   return typed !== "" ? typed : defaultTask(result.intention)
 }
 
-export const typeOf = (result: ReviewResult, choice: ResultChoice | undefined): TrackerType => choice?.type ?? result.type
+export const tagOf = (result: ReviewResult, choice: ResultChoice | undefined): ItemTag => choice?.tag ?? result.tag
 
 export const toSavedTab = (tab: ReviewTab): SavedTab => ({ title: tab.title, url: tab.url, domain: domainOf(tab.url) })
 
@@ -188,7 +188,7 @@ export const itemFor = (
   if (first === undefined) return Option.none()
   return Option.map(
     newSavedItem({ id, intention: result.intention, tabs: [first, ...rest], savedAt }),
-    (item): SavedItem => ({ ...item, task: taskOf(result, choice), type: typeOf(result, choice) })
+    (item): SavedItem => ({ ...item, task: taskOf(result, choice), tag: tagOf(result, choice) })
   )
 }
 

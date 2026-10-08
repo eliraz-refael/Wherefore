@@ -2,12 +2,43 @@
  * Small display helpers for the side panel (and, from M3, the full page). Pure: no React, no Effect
  * services, so they are easy to test.
  */
-import { domainOf } from "@wherefore/core"
+import { domainOf, type ItemTag } from "@wherefore/core"
 import { DateTime } from "effect"
 
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
 export const tabCount = (n: number): string => plural(n, "tab")
+
+/**
+ * The sections the list (and the Tidy up results) group items into, in order. Until the list
+ * shows each item's tag, do and decide share "To do".
+ */
+export type ListSection = "todo" | "follow_up" | "read" | "keep"
+
+export const SECTION_ORDER: ReadonlyArray<ListSection> = ["todo", "follow_up", "read", "keep"]
+
+export const sectionLabel: { readonly [S in ListSection]: string } = {
+  todo: "To do",
+  follow_up: "Follow up",
+  read: "Read",
+  keep: "Keep"
+}
+
+const sectionOfTag: { readonly [T in ItemTag]: ListSection } = {
+  do: "todo",
+  decide: "todo",
+  track: "follow_up",
+  read: "read",
+  keep: "keep"
+}
+
+/** Each section's own tag, for an item moved there. */
+const sectionTag: { readonly [S in ListSection]: ItemTag } = { todo: "do", follow_up: "track", read: "read", keep: "keep" }
+
+export const sectionOf = (tag: ItemTag): ListSection => sectionOfTag[tag]
+
+/** The tag for an item moved to `section`: `tag` when it is in that section already. */
+export const tagIn = (section: ListSection, tag: ItemTag): ItemTag => sectionOf(tag) === section ? tag : sectionTag[section]
 
 const KNOWN_AGENTS: Readonly<Record<string, string>> = { "claude-code": "Claude Code", "claude-ai": "Claude" }
 

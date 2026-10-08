@@ -10,7 +10,8 @@ import { FakeChrome } from "./fakes/chrome.ts"
 
 const storedItem = (id: string, extra: Record<string, unknown> = {}) => ({
   id,
-  type: "todo",
+  tag: "do",
+  title: `Title ${id}`,
   task: `Task ${id}`,
   intention: `Intention ${id}`,
   why: "Because",
@@ -50,7 +51,7 @@ describe("Store reads and migrations", () => {
 
   it.effect("doesn't write when the stored version is current, and returns the empty value when absent", () =>
     Effect.gen(function*() {
-      const chrome = new FakeChrome({ local: { items: { version: 1, data: [storedItem("a")] } } })
+      const chrome = new FakeChrome({ local: { items: { version: 2, data: [storedItem("a")] } } })
       const store = makeStore(chrome.api)
       expect((yield* store.read(itemsKey)).map((i) => i.id)).toEqual(["a"])
       expect(yield* store.read(settingsKey)).toEqual({})
@@ -60,7 +61,7 @@ describe("Store reads and migrations", () => {
   it.effect("never drops a value it can't decode: backs it up and fails with a typed error", () =>
     Effect.gen(function*() {
       yield* TestClock.setTime(1_000)
-      const broken = { version: 1, data: [storedItem("a", { status: "dropped" })] }
+      const broken = { version: 2, data: [storedItem("a", { status: "dropped" })] }
       const chrome = new FakeChrome({ local: { items: broken } })
       const store = makeStore(chrome.api)
 
@@ -86,13 +87,73 @@ describe("Store reads and migrations", () => {
 
   it.effect("treats a value from a newer version, or without an envelope, as unreadable", () =>
     Effect.gen(function*() {
-      const chrome = new FakeChrome({ local: { items: { version: 2, data: [] }, settings: [storedItem("a")] } })
+      const chrome = new FakeChrome({ local: { items: { version: 3, data: [] }, settings: [storedItem("a")] } })
       const errors = yield* makeStore(chrome.api).migrateAll
       expect(errors.map((e) => [e._tag, "key" in e ? e.key : ""])).toEqual([
         ["StoreUnreadable", "items"],
         ["StoreUnreadable", "settings"]
       ])
-      expect(chrome.local.get("items")).toEqual({ version: 2, data: [] })
+      expect(chrome.local.get("items")).toEqual({ version: 3, data: [] })
+    }))
+})
+
+describe("Store items migrations", () => {
+  /** An item as version 1 stored it: a tracker type, no tag, title or due date. */
+  const v1Item = (id: string, type: string, extra: Record<string, unknown> = {}) => {
+    const { tag: _, title: __, ...rest } = storedItem(id)
+    return { ...rest, type, ...extra }
+  }
+
+  it.effect("migrates a version 1 list at startup: types become tags, the intention becomes the title", () =>
+    Effect.gen(function*() {
+      const v1 = [
+        v1Item("a", "todo"),
+        v1Item("b", "follow_up", { intention: "  " }),
+        v1Item("c", "read", { status: "done", doneAt: "2026-10-05T08:00:00.000Z" }),
+        v1Item("d", "keep", { tabs: [{ title: "Docs", url: "https://docs.example/", faviconUrl: "https://docs.example/f.ico", domain: "docs.example" }] })
+      ]
+      const chrome = new FakeChrome({ local: { items: { version: 1, data: v1 } } })
+      const store = makeStore(chrome.api)
+      expect(yield* store.migrateAll).toEqual([])
+
+      const written = chrome.local.get("items") as { version: number; data: ReadonlyArray<Record<string, unknown>> }
+      expect(written.version).toBe(2)
+      expect(written.data.map((item) => [item["id"], item["tag"], item["title"], item["task"]])).toEqual([
+        ["a", "do", "Intention a", "Task a"],
+        ["b", "track", "Task b", "Task b"],
+        ["c", "read", "Intention c", "Task c"],
+        ["d", "keep", "Intention d", "Task d"]
+      ])
+      // Nothing else changes: no type, no due date, the rest as it was.
+      for (const [i, item] of written.data.entries()) {
+        const { type: _, ...rest } = v1[i] ?? {}
+        expect(item).toEqual({ ...rest, tag: item["tag"], title: item["title"] })
+      }
+      const items = yield* store.read(itemsKey)
+      expect(items.map((item) => [item.id, item.status])).toEqual([["a", "open"], ["b", "open"], ["c", "done"], ["d", "open"]])
+      // Written back once: a second read finds the current version and writes nothing.
+      const writes = chrome.calls.filter((call) => call === "storage.local.set").length
+      yield* store.read(itemsKey)
+      expect(chrome.calls.filter((call) => call === "storage.local.set").length).toBe(writes)
+    }))
+
+  it.effect("backs up a version 1 list it can't migrate or read, and never wipes it", () =>
+    Effect.gen(function*() {
+      yield* TestClock.setTime(2_000)
+      const unknownType = { version: 1, data: [v1Item("a", "todo"), v1Item("b", "someday")] }
+      const badItem = { version: 1, data: [v1Item("a", "todo", { status: "dropped" })] }
+      for (const [raw, reason] of [[unknownType, "migration from version 1 failed"], [badItem, "doesn't match version 2"]] as const) {
+        const chrome = new FakeChrome({ local: { items: raw } })
+        const store = makeStore(chrome.api)
+        const error = yield* Effect.flip(store.read(itemsKey))
+        assert(error._tag === "StoreUnreadable")
+        expect(error.message).toContain(reason)
+        expect(error.backupKey).toBe("backup:items:2000")
+        expect(chrome.local.get("backup:items:2000")).toMatchObject({ at: 2000, raw })
+        expect(chrome.local.get("items")).toEqual(raw)
+        expect((yield* Effect.flip(store.saveItems([item("c")])))._tag).toBe("StoreUnreadable")
+        expect(chrome.local.get("items")).toEqual(raw)
+      }
     }))
 })
 
@@ -112,7 +173,7 @@ describe("Store item operations", () => {
       expect(done.doneAt && DateTime.formatIso(done.doneAt)).toBe("2026-10-06T12:00:00.000Z")
       // Done items stay in the list, as the Done archive.
       expect(chrome.local.get("items")).toMatchObject({
-        version: 1,
+        version: 2,
         data: [{ id: "a" }, { id: "b", status: "done", doneAt: "2026-10-06T12:00:00.000Z" }, { id: "c" }]
       })
       const reopened = yield* store.markOpen(SavedItemId.make("b"))
@@ -210,7 +271,7 @@ describe("Store recovery", () => {
           [`${runKeyPrefix}b`]: { version: 1, data: { id: "b" } },
           "backup:run:c:1": oldBackup,
           "backup:items:1": oldBackup,
-          items: { version: 1, data: [storedItem("x")] }
+          items: { version: 2, data: [storedItem("x")] }
         }
       })
       const backupKey = yield* makeStore(chrome.api).resetKey("runIndex")
@@ -236,7 +297,7 @@ describe("StoreReader", () => {
 
   it.effect("streams the current value, then every change from storage.onChanged", () =>
     Effect.gen(function*() {
-      const chrome = new FakeChrome({ local: { items: { version: 1, data: [storedItem("a")] } } })
+      const chrome = new FakeChrome({ local: { items: { version: 2, data: [storedItem("a")] } } })
       const reader = yield* readerFor(chrome)
       const store = makeStore(chrome.api)
       const fiber = yield* reader.watch(itemsKey).pipe(
