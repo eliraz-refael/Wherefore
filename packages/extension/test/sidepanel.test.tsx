@@ -103,26 +103,45 @@ const listChrome = () =>
     }
   })
 
+/** The titles of the items shown, in order (in `scope`, else the whole panel). */
+const rowTitles = (scope: { readonly getAllByRole: (role: "article") => Array<HTMLElement> }) =>
+  scope.getAllByRole("article").map((card) => card.querySelector(".wf-list-title")?.textContent)
+const queryRowTitles = (view: ReturnType<Panels["open"]>) =>
+  view.ui.queryAllByRole("article").map((card) => card.querySelector(".wf-list-title")?.textContent)
+const headings = (view: ReturnType<Panels["open"]>) =>
+  view.ui.getAllByRole("heading", { level: 2 }).map((heading: HTMLElement) => heading.textContent)
+
 describe("Your list", () => {
-  it("groups open items by type, with each tab's title and domain, and links to the Done archive", async () => {
+  it("shows open items under Anytime by tag, each with its tag, title and sites, and links to the Done archive", async () => {
     const app = make(listChrome())
     await app.start()
     const view = app.open()
 
     expect(await view.ui.findByRole("heading", { level: 1, name: "5 things you meant to do" })).toBeTruthy()
-    const groups = view.ui.getAllByRole("heading", { level: 2 }).map((heading: HTMLElement) => heading.textContent)
-    expect(groups).toEqual(["To do", "Follow up", "Read", "Keep"])
-    const todo = within(view.ui.getByRole("region", { name: "To do" }))
-    expect(todo.getAllByRole("article").map((card) => card.querySelector(".wf-item-task")?.textContent).sort()).toEqual([
+    // Nothing has a date, so there is no "Coming up".
+    expect(headings(view)).toEqual(["Anytime"])
+    // By tag (do, track, decide, read, keep); within a tag, the list's order.
+    const anytime = within(view.ui.getByRole("region", { name: "Anytime" }))
+    expect(rowTitles(anytime)).toEqual([
       "Finish the auth PR",
-      "Pick a desk"
+      "Pick a desk",
+      "Watch the Vite release",
+      "Read the Effect guide",
+      "Chrome API reference"
     ])
-    expect(within(view.ui.getByRole("region", { name: "Keep" })).getByText("Chrome API reference")).toBeTruthy()
+    const card = view.ui.getByRole("article", { name: "Watch the Vite release" })
+    expect(card.querySelector(".wf-tag")?.textContent).toBe("Track")
+    expect(card.querySelector(".wf-tag")?.className).toBe("wf-tag wf-tag-track")
+    expect(within(card).getByText("1 tab · vite.dev")).toBeTruthy()
+    expect(card.querySelector(".wf-date-pill")).toBeNull()
 
-    // Expanding shows the tabs: title and domain.
-    const toggle = view.ui.getByRole("button", { name: /^Chrome API reference/ })
+    // Expanding shows the next step, the why and the tabs: title and domain.
+    const toggle = view.ui.getByRole("button", { name: "Chrome API reference" })
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
     fireEvent.click(toggle)
     expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(view.ui.getByText("Because")).toBeTruthy()
+    expect(view.ui.getByRole("button", { name: "Open" })).toBeTruthy()
     const tab = view.ui.getByRole("link", { name: /tabs API/ })
     expect(tab.textContent).toContain("developer.chrome.com")
     expect(tab.getAttribute("href")).toBe("https://developer.chrome.com/docs/extensions/reference/api/tabs")
@@ -139,7 +158,7 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: "Done: Finish the auth PR" }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Mark done: Finish the auth PR" }))
     expect(await view.ui.findByText("Done. Closed 1 tab.")).toBeTruthy()
     // The open tab matched despite its tracking parameter; the other tab stays.
     expect(chrome.tabs.map((tab) => tab.id)).toEqual([2])
@@ -153,7 +172,22 @@ describe("Your list", () => {
     expect(await view.ui.findByText("“Finish the auth PR” is back on your list.")).toBeTruthy()
     expect(storedData(chrome, "items").find((item: any) => item.id === "a").status).toBe("open")
     expect(chrome.tabs.map((tab) => tab.url)).toContain("https://github.com/acme/api/pull/412?utm_source=mail")
-    expect(await view.ui.findByText("Finish the auth PR")).toBeTruthy()
+    expect(await view.ui.findByRole("button", { name: "Finish the auth PR" })).toBeTruthy()
+    expect(rowTitles(view.ui)[0]).toBe("Finish the auth PR")
+  })
+
+  it("Done in an expanded item does the same as the round Done", async () => {
+    const chrome = listChrome()
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: "Pick a desk" }))
+    fireEvent.click(view.ui.getByRole("button", { name: "Done" }))
+    expect(await view.ui.findByText("Done: “Pick a desk”.")).toBeTruthy()
+    expect(storedData(chrome, "items").find((item: any) => item.id === "e").status).toBe("done")
+    await waitFor(() => expect(view.ui.queryByRole("article", { name: "Pick a desk" })).toBeNull())
+    expect(document.activeElement?.getAttribute("data-item-toggle")).toBe("b")
   })
 
   it("Remove deletes the item (its tabs stay); Undo puts it back where it was", async () => {
@@ -162,16 +196,18 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Watch the Vite release/ }))
-    fireEvent.click(view.ui.getByRole("button", { name: "Remove from list" }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Watch the Vite release" }))
+    fireEvent.click(view.ui.getByRole("button", { name: "Remove" }))
     expect(await view.ui.findByText("Removed “Watch the Vite release”.")).toBeTruthy()
     expect(storedData(chrome, "items").map((item: any) => item.id)).toEqual(["a", "c", "d", "e", "f"])
     expect(chrome.tabs).toHaveLength(2)
-    await waitFor(() => expect(view.ui.queryByRole("region", { name: "Follow up" })).toBeNull())
+    await waitFor(() => expect(view.ui.queryByRole("article", { name: "Watch the Vite release" })).toBeNull())
+    expect(view.ui.queryByRole("button", { name: "Track 1" })).toBeNull()
 
     fireEvent.click(view.ui.getByRole("button", { name: "Undo" }))
     await waitFor(() => expect(storedData(chrome, "items").map((item: any) => item.id)).toEqual(["a", "b", "c", "d", "e", "f"]))
-    expect(await view.ui.findByRole("region", { name: "Follow up" })).toBeTruthy()
+    expect(await view.ui.findByRole("article", { name: "Watch the Vite release" })).toBeTruthy()
+    expect(rowTitles(view.ui)[2]).toBe("Watch the Vite release")
   })
 
   it("× takes one tab off an item (no browser tab closes); Undo puts it back where it was", async () => {
@@ -197,7 +233,7 @@ describe("Your list", () => {
     const view = app.open()
     const storedTabs = () => storedData(chrome, "items")[0].tabs.map((tab: any) => tab.title)
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Compare desks" }))
     fireEvent.click(view.ui.getByRole("button", { name: "Remove Desk A" }))
     expect(await view.ui.findByText("Removed “Desk A” from “Compare desks”.")).toBeTruthy()
     expect(storedTabs()).toEqual(["Desk B", "Desk C"])
@@ -220,18 +256,18 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Watch the Vite release/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Watch the Vite release" }))
     fireEvent.click(view.ui.getByRole("button", { name: "Remove Vite" }))
     expect(await view.ui.findByText("Removed “Watch the Vite release” with its last tab.")).toBeTruthy()
     expect(storedData(chrome, "items").map((item: any) => item.id)).toEqual(["a", "c", "d", "e", "f"])
-    await waitFor(() => expect(view.ui.queryByRole("region", { name: "Follow up" })).toBeNull())
+    await waitFor(() => expect(view.ui.queryByRole("article", { name: "Watch the Vite release" })).toBeNull())
 
     fireEvent.click(view.ui.getByRole("button", { name: "Undo" }))
     expect(await view.ui.findByText("“Watch the Vite release” is back on your list.")).toBeTruthy()
     const items = storedData(chrome, "items")
     expect(items.map((item: any) => item.id)).toEqual(["a", "b", "c", "d", "e", "f"])
     expect(items[1].tabs.map((tab: any) => tab.url)).toEqual(["https://vite.dev/"])
-    expect(await view.ui.findByRole("region", { name: "Follow up" })).toBeTruthy()
+    expect(await view.ui.findByRole("article", { name: "Watch the Vite release" })).toBeTruthy()
 
     // The Done archive's tabs have no ×.
     fireEvent.click(view.ui.getByRole("button", { name: "Done · 1" }))
@@ -267,7 +303,7 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Compare desks" }))
     // The panel still shows two tabs; the worker has one.
     changeBehindThePanel(chrome, [deskTabs.A])
     const remove = view.ui.getByRole("button", { name: "Remove Desk A" })
@@ -284,7 +320,7 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Compare desks" }))
     // Desk B is already gone in storage, so the worker answers TabNotFound.
     changeBehindThePanel(chrome, [deskTabs.A, deskTabs.C])
     const remove = view.ui.getByRole("button", { name: "Remove Desk B" })
@@ -305,7 +341,7 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Compare desks/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Compare desks" }))
     // The worker's order differs, so it finds Desk A by URL at another index than the panel's.
     changeBehindThePanel(chrome, [deskTabs.B, deskTabs.A])
     const remove = view.ui.getByRole("button", { name: "Remove Desk A" })
@@ -321,9 +357,9 @@ describe("Your list", () => {
     await app.start()
     const view = app.open()
 
-    fireEvent.click(await view.ui.findByRole("button", { name: /^Pick a desk/ }))
+    fireEvent.click(await view.ui.findByRole("button", { name: "Pick a desk" }))
     fireEvent.click(view.ui.getByRole("button", { name: "Edit" }))
-    const input = view.ui.getByLabelText("Task")
+    const input = view.ui.getByLabelText("Next step")
     await waitFor(() => expect(document.activeElement).toBe(input))
     fireEvent.change(input, { target: { value: "Pick a standing desk" } })
     fireEvent.click(view.ui.getByRole("button", { name: "Save" }))
@@ -430,14 +466,20 @@ describe("Tidy up, results", () => {
 
     const groups = view.ui.getAllByRole("heading", { level: 2 }).map((heading: HTMLElement) => heading.textContent)
     expect(groups).toEqual(["To do", "Follow up", "Read", "Keep"])
-    expect(within(view.ui.getByRole("region", { name: "To do" })).getByText("Finish reviewing the auth PR")).toBeTruthy()
+    // Each result has its tag and short title (else the intention's title), then its task.
+    const todo = within(view.ui.getByRole("region", { name: "To do" }))
+    const auth = todo.getByRole("button", { name: "Auth PR #7" })
+    expect(auth.querySelector(".wf-tag")?.textContent).toBe("Do")
+    expect(within(auth).getByText("Finish reviewing the auth PR")).toBeTruthy()
+    const vite = view.ui.getByRole("button", { name: "Follow the Vite 8 release" })
+    expect(vite.querySelector(".wf-tag")?.className).toBe("wf-tag wf-tag-track")
     // Low confidence reads "Not sure"; the confidence itself is never shown.
     const read = within(view.ui.getByRole("region", { name: "Read" }))
     expect(read.getByText("Learn Effect")).toBeTruthy()
     expect(read.getByText("Not sure")).toBeTruthy()
     expect(view.container.textContent).not.toMatch(/confidence|intention|evidence/i)
     // Tab 18 is already in "The old thing": it closes, and isn't offered again.
-    expect(view.ui.queryByRole("button", { name: /^The old thing/ })).toBeNull()
+    expect(view.ui.queryByRole("button", { name: "The old thing" })).toBeNull()
 
     // Saved: the auth PR (2 tabs), Vite, Effect, the reference. Closed: those tabs except the
     // pinned reference, the finished order, the sign-in page and the tab already on the list.
@@ -454,12 +496,14 @@ describe("Tidy up, results", () => {
     expect(view.ui.getByText("Already on your list · 1 tab")).toBeTruthy()
 
     // Expand a result: edit its task, change its type, read why, see its tabs.
-    fireEvent.click(view.ui.getByRole("button", { name: /^Watch for the Vite 8 release/ }))
+    fireEvent.click(vite)
     expect(view.ui.getByText("Why: Follow the Vite 8 release")).toBeTruthy()
     expect(view.ui.getByText("vite.dev")).toBeTruthy()
     fireEvent.change(view.ui.getByLabelText("Save as"), { target: { value: "Check the Vite 8 notes" } })
     fireEvent.change(view.ui.getByLabelText("Under"), { target: { value: "read" } })
     expect(await within(view.ui.getByRole("region", { name: "Read" })).findByText("Check the Vite 8 notes")).toBeTruthy()
+    // The chip follows the type.
+    expect(view.ui.getByRole("button", { name: "Follow the Vite 8 release" }).querySelector(".wf-tag")?.textContent).toBe("Read")
     await waitFor(() => expect(document.activeElement).toBe(view.ui.getByLabelText("Under")))
 
     // Keep these tabs open: not saved, its tab no longer closes.
@@ -524,7 +568,7 @@ describe("Tidy up, results", () => {
     const view = app.open(2)
     await openReview(view)
 
-    fireEvent.click(view.ui.getByRole("button", { name: /^Finish reviewing the auth PR/ }))
+    fireEvent.click(view.ui.getByRole("button", { name: "Auth PR #7" }))
     const saveJustThis = view.ui.getByRole("button", { name: "Save just this" })
     fireEvent.click(saveJustThis)
     fireEvent.click(saveJustThis)

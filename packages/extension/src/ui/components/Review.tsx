@@ -1,6 +1,6 @@
 /**
  * Tidy up, results (canvas v6 "Review"): what each group of tabs was for, ready to save with smart
- * defaults. Each result expands to edit its task and type, read the one-line why and see its tabs.
+ * defaults, each with its tag and short title. Each result expands to edit its task and type, read the one-line why and see its tabs.
  * Below: what closes (finished, leftovers, already on the list) and what stays open (everyday
  * apps). The sticky bar saves and closes everything at once, with undo.
  */
@@ -24,9 +24,10 @@ import {
   type ReviewTab,
   saveBarLabel,
   tagOf,
-  taskOf
+  taskOf,
+  titleOf
 } from "../review.ts"
-import { ChevronIcon, SiteBadge, SubHeader, TabText } from "./common.tsx"
+import { ChevronIcon, SiteBadge, SubHeader, TabText, TagChip } from "./common.tsx"
 
 /** Results shown before "+ N more". */
 export const RESULTS_SHOWN = 12
@@ -139,9 +140,13 @@ function ResultCard(props: {
   const id = result.intention.id
   const detailsId = `result-${id}-details`
   const typeSelectId = `result-${id}-type`
+  const titleId = `result-${id}-title`
+  const tagId = `result-${id}-tag`
+  const subId = `result-${id}-sub`
   const saved = choice?.savedAs !== undefined
   const kept = choice?.keepOpen === true
   const task = taskOf(result, choice)
+  const title = titleOf(result.intention)
   const count = result.tabs.length
   const meta = saved ? "Saved" : kept ? "Keeping open" : undefined
 
@@ -163,12 +168,20 @@ function ResultCard(props: {
         className="wf-result-toggle"
         aria-expanded={expanded}
         aria-controls={detailsId}
+        aria-labelledby={titleId}
+        aria-describedby={`${tagId} ${subId}`}
         onClick={props.onToggle}
       >
         <span className="wf-result-heading">
-          <span className="wf-result-task">{task}</span>
-          {result.unsure && !saved ? <span className="wf-unsure">Not sure</span> : null}
-          {meta === undefined ? null : <span className="wf-result-meta">{meta}</span>}
+          <span className="wf-result-line">
+            <TagChip tag={tagOf(result, choice)} id={tagId} />
+            <span id={titleId} className="wf-result-title">{title}</span>
+          </span>
+          <span id={subId} className="wf-result-lines">
+            {task === title ? null : <span className="wf-result-task">{task}</span>}
+            {result.unsure && !saved ? <span className="wf-unsure">Not sure</span> : null}
+            {meta === undefined ? null : <span className="wf-result-meta">{meta}</span>}
+          </span>
         </span>
         <span className="wf-result-count" aria-label={tabCount(count)}>{count}</span>
         <ChevronIcon open={expanded} />

@@ -58,6 +58,9 @@ export const tagCounts = (items: ReadonlyArray<SavedItem>): { readonly [T in Ite
 /** Whether an item goes under "Coming up": it has a date that can be read. */
 const hasDate = (item: SavedItem): boolean => item.due !== undefined && parseCalendarDate(item.due.date) !== undefined
 
+/** An item's date as text: YYYY-MM-DD sorts in date order. */
+const dateOf = (item: SavedItem): string => item.due?.date ?? ""
+
 export interface ListSections {
   /** Items with a date, soonest first (so overdue ones lead). */
   readonly comingUp: ReadonlyArray<SavedItem>
@@ -76,8 +79,7 @@ export const listSections = (
   const words = searchWords(query)
   const shown = items.filter((item) => (filter === "all" || item.tag === filter) && matchesSearch(item, words))
   return {
-    // YYYY-MM-DD compares as text in date order.
-    comingUp: shown.filter(hasDate).sort((a, b) => (a.due!.date < b.due!.date ? -1 : a.due!.date > b.due!.date ? 1 : 0)),
+    comingUp: shown.filter(hasDate).sort((a, b) => dateOf(a).localeCompare(dateOf(b))),
     anytime: shown.filter((item) => !hasDate(item)).sort((a, b) => TAG_ORDER.indexOf(a.tag) - TAG_ORDER.indexOf(b.tag))
   }
 }

@@ -162,6 +162,12 @@ export const defaultTask = (intention: Intention): string => {
   return next !== "" ? next : intention.title
 }
 
+/** The short title a result is listed by: the model's `short_title`, else the intention's title (as `newSavedItem`). */
+export const titleOf = (intention: Intention): string => {
+  const short = intention.shortTitle?.trim() ?? ""
+  return short !== "" ? short : intention.title
+}
+
 export const taskOf = (result: ReviewResult, choice: ResultChoice | undefined): string => {
   const typed = choice?.task?.trim() ?? ""
   return typed !== "" ? typed : defaultTask(result.intention)

@@ -87,7 +87,11 @@ const SAVED_AT = ISO_NOW()
 export const storedItem = (fields: {
   readonly id: string
   readonly task: string
+  /** The short title; the task when not given. */
+  readonly title?: string
+  readonly why?: string
   readonly tag?: "do" | "track" | "decide" | "read" | "keep"
+  readonly due?: { readonly date: string; readonly kind: "due" | "event" | "renews" | "expires" | "starts"; readonly source: string }
   readonly tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>
   readonly status?: "open" | "done"
   readonly savedAt?: string
@@ -95,10 +99,11 @@ export const storedItem = (fields: {
 }) => ({
   id: fields.id,
   tag: fields.tag ?? "do",
-  title: fields.task,
+  title: fields.title ?? fields.task,
   task: fields.task,
   intention: fields.task,
-  why: "Because",
+  why: fields.why ?? "Because",
+  ...(fields.due === undefined ? {} : { due: fields.due }),
   tabs: fields.tabs.map((tab) => ({ ...tab, domain: new URL(tab.url).hostname.replace(/^www\./, "") })),
   status: fields.status ?? "open",
   savedAt: fields.savedAt ?? SAVED_AT,

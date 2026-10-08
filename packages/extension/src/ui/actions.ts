@@ -168,6 +168,8 @@ export const showTab = (id: TabId) => Effect.flatMap(Effect.service(PageTabs), (
 
 // ---------- your list ----------
 
+// Messages name an item by its title, as the list shows it.
+
 /** Done: closes the item's open tabs and moves it to the Done archive. */
 export const markItemDone = (item: SavedItem) =>
   Effect.gen(function*() {
@@ -177,11 +179,11 @@ export const markItemDone = (item: SavedItem) =>
     // Done is one step for the user: if the item can't be archived, its tabs come back.
     yield* client.call("mark_done", { id: item.id }).pipe(Effect.onError(() => Effect.ignore(undoClose(token))))
     return {
-      message: closed === 0 ? `Done: “${item.task}”.` : `Done. Closed ${tabCount(closed)}.`,
+      message: closed === 0 ? `Done: “${item.title}”.` : `Done. Closed ${tabCount(closed)}.`,
       undo: undoing(Effect.gen(function*() {
         yield* undoClose(token)
         yield* client.call("mark_open", { id: item.id })
-        return `“${item.task}” is back on your list.`
+        return `“${item.title}” is back on your list.`
       }))
     } satisfies Done
   })
@@ -192,8 +194,8 @@ export const removeItem = (item: SavedItem) =>
     const client = yield* worker
     const removed = yield* client.call("remove_item", { id: item.id })
     return {
-      message: `Removed “${item.task}”.`,
-      undo: undoing(Effect.as(client.call("restore_item", { removed }), `“${item.task}” is back on your list.`))
+      message: `Removed “${item.title}”.`,
+      undo: undoing(Effect.as(client.call("restore_item", { removed }), `“${item.title}” is back on your list.`))
     } satisfies Done
   })
 
@@ -209,14 +211,14 @@ export const removeTab = (item: SavedItem, tab: SavedTab, index: number) =>
     if (removal._tag === "ItemRemoved") {
       return {
         removal,
-        message: `Removed “${item.task}” with its last tab.`,
-        undo: undoing(Effect.as(client.call("restore_item", { removed: removal.removed }), `“${item.task}” is back on your list.`))
+        message: `Removed “${item.title}” with its last tab.`,
+        undo: undoing(Effect.as(client.call("restore_item", { removed: removal.removed }), `“${item.title}” is back on your list.`))
       } satisfies Done & { readonly removal: TabRemoval }
     }
     return {
       removal,
-      message: `Removed “${title}” from “${item.task}”.`,
-      undo: undoing(Effect.as(client.call("restore_tab", { removed: removal.removed }), `“${title}” is back in “${item.task}”.`))
+      message: `Removed “${title}” from “${item.title}”.`,
+      undo: undoing(Effect.as(client.call("restore_tab", { removed: removal.removed }), `“${title}” is back in “${item.title}”.`))
     } satisfies Done & { readonly removal: TabRemoval }
   })
 
