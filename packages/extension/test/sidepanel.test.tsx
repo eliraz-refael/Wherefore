@@ -396,15 +396,20 @@ describe("Your list", () => {
     // A tab title and a title.
     search(view, "tabs chrome")
     expect(rowTitles(view.ui)).toEqual(["Chrome API reference"])
-    // Every word must match somewhere.
+    // Every word must match somewhere. The live region was there all along (empty), so the change
+    // of its text is announced.
+    const regions = view.ui.getAllByRole("status")
     search(view, "desk github")
     expect(queryRowTitles(view)).toEqual([])
-    expect(view.ui.getByText("Nothing matches “desk github”. Search looks at tasks, notes, tab titles and sites.")).toBeTruthy()
+    const noMatches = view.ui.getByText("Nothing matches “desk github”. Search looks at tasks, notes, tab titles and sites.")
+    expect(regions).toContain(noMatches)
+    expect(noMatches.getAttribute("aria-live")).toBe("polite")
     expect(view.ui.queryByRole("heading", { level: 2 })).toBeNull()
 
     search(view, "")
     expect(rowTitles(view.ui)).toHaveLength(3)
     expect(view.ui.queryByText(/^Nothing matches/)).toBeNull()
+    expect(noMatches.isConnected && noMatches.textContent).toBe("")
   })
 
   it("filter chips: All and each tag that has items, with counts, one at a time, with search", async () => {

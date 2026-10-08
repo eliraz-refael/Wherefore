@@ -222,13 +222,12 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
             </div>
             {section("group-coming-up", "Coming up", comingUp)}
             {section("group-anytime", "Anytime", anytime)}
-            {comingUp.length === 0 && anytime.length === 0
-              ? (
-                <p className="wf-muted" role="status">
-                  Nothing matches “{query.trim()}”. Search looks at tasks, notes, tab titles and sites.
-                </p>
-              )
-              : null}
+            {/* Always there, so screen readers hear the text change when nothing matches. */}
+            <p className="wf-muted wf-no-matches" role="status" aria-live="polite">
+              {comingUp.length === 0 && anytime.length === 0
+                ? `Nothing matches “${query.trim()}”. Search looks at tasks, notes, tab titles and sites.`
+                : null}
+            </p>
           </>
         )}
       <div className="wf-list-footer">
