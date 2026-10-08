@@ -7,6 +7,10 @@
 # is a dry run by default: everything but the release and the publish. To release from a manual
 # run, pick the tag as the ref and untick "dry run". One-time setup: packages/companion/README.md,
 # "Releasing".
+#
+# npm auth: trusted publishing (GitHub OIDC, no token) once it is configured for the package on
+# npmjs.com. Until then (npm allows it only on a package that exists), the NPM_TOKEN secret, for the
+# first publish; delete the secret afterwards.
 name: Release companion
 
 on:
@@ -33,7 +37,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write # the GitHub Release
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing (OIDC) and provenance
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     steps:
@@ -48,8 +52,14 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          # Writes an .npmrc that authenticates `npm publish` with NODE_AUTH_TOKEN.
-          registry-url: https://registry.npmjs.org
+          # No registry-url: it would write an .npmrc with `_authToken=${NODE_AUTH_TOKEN}` for every
+          # npm command in the job. The publish step writes one only when it uses NPM_TOKEN.
+
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
+      - name: Upgrade npm
+        run: |
+          npm install -g npm@11.20.0
+          npm --version
 
       - name: Check the version
         id: version
@@ -146,7 +156,7 @@ jobs:
       - name: Publish to npm
         if: env.DRY_RUN != 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           TGZ: ${{ steps.pack.outputs.tgz }}
           VERSION: ${{ steps.version.outputs.version }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
@@ -157,4 +167,14 @@ jobs:
           fi
           tag=latest
           if [ "$PRERELEASE" = true ]; then tag=next; fi
+          if [ -n "$NPM_TOKEN" ]; then
+            # The first publish, before a trusted publisher can be configured. npm expands
+            # ${NPM_TOKEN} itself when it reads this file, so the token is never written to disk.
+            echo "npm auth: the NPM_TOKEN secret (npm still prefers trusted publishing if it is configured)."
+            # shellcheck disable=SC2016
+            printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "$RUNNER_TEMP/publish.npmrc"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/publish.npmrc"
+          else
+            echo "npm auth: trusted publishing (GitHub OIDC), no token."
+          fi
           npm publish "$TGZ" --provenance --access public --tag "$tag"

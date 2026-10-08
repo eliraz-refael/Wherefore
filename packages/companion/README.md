@@ -281,16 +281,30 @@ The package is `@eliraz-refael/wherefore`, on npm and as a tarball on each GitHu
 `.github/workflows/release-companion.yml` builds, checks and packs it, attaches the `.tgz` to a
 Release for the tag, then publishes the same tarball to npm with provenance.
 
-One-time setup:
+npm auth is **trusted publishing**: npm trusts this workflow through GitHub's OIDC, with no token
+stored anywhere (and provenance comes with it). npm only lets you set that up on a package that
+already exists, so the first release uses a short-lived token.
+
+One-time setup, for the first release:
 
 1. An npm account that owns the `eliraz-refael` scope (the npm username `eliraz-refael`, or an
    organization of that name), with two-factor authentication on.
-2. An npm **granular access token** (npmjs.com → Access Tokens → Generate New Token → Granular)
-   with read and write access to `@eliraz-refael/wherefore` (before the first publish, to the
-   `@eliraz-refael` scope's packages) and "bypass two-factor authentication" allowed, or a classic
-   **Automation** token. Save it as the repository secret `NPM_TOKEN` (GitHub → Settings → Secrets
-   and variables → Actions). Later, npm's trusted publishing for this workflow can replace the
-   token.
+2. A short-lived npm **granular access token** (npmjs.com → Access Tokens → Generate New Token →
+   Granular; expiry: a day or a week) with read and write access to the `@eliraz-refael` scope's
+   packages and "bypass two-factor authentication" allowed. Save it as the repository secret
+   `NPM_TOKEN` (GitHub → Settings → Secrets and variables → Actions).
+3. Release (below). The workflow publishes with `NPM_TOKEN` and logs "npm auth: the NPM_TOKEN
+   secret".
+
+After the first release:
+
+1. On npmjs.com → `@eliraz-refael/wherefore` → Settings → Trusted Publisher → GitHub Actions:
+   organization or user `eliraz-refael`, repository `Wherefore`, workflow filename
+   `release-companion.yml`, no environment (the workflow uses none). Save.
+2. Delete the `NPM_TOKEN` secret, and the token on npmjs.com. Optionally, in the package's
+   Settings → Publishing access, require two-factor authentication and disallow tokens.
+
+Later releases need no token: the workflow logs "npm auth: trusted publishing (GitHub OIDC)".
 
 Each release:
 

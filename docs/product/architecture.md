@@ -98,7 +98,7 @@ Chosen for fit with Effect v4 (2026-10-04): Atom bindings exist for React, Solid
 | M1 | API-mode parity | Extension with `TabTools`, `Store`, API agent on `effect/ai`, side panel (React + Atom) reaches POC parity: triage, questions, review, save/close/undo |
 | M2 | Companion | Broker + MCP + ACP on Effect; onboarding detects the companion; no port polling. In three PRs: **A** broker + install (one broker per profile, socket registry, status in Settings), **B** MCP mode through the brokers (session ids, one leased run per profile shown in the panel, questions in the panel, Stop, broker tokens), **C** ACP mode from the panel (the worker creates the run, the broker starts Claude Code on the user's login with `mcp --profile --run`, permission guard, Stop ends the process tree, typed failures) + onboarding and Settings for it |
 | M3 | Product loop | Incremental triage, Saved list + full page, resume as group, Markdown export, e2e tests |
-| M4 | Store-ready | Optional host permissions requested at first run, icons, privacy policy, unlisted CWS listing, install docs for co-workers. The companion is published as `@eliraz-refael/wherefore` (npm and GitHub Release tarballs, from a `companion-v*` tag) |
+| M4 | Store-ready | Optional host permissions requested at first run, icons, privacy policy, unlisted CWS listing, install docs for co-workers. The companion is published as `@eliraz-refael/wherefore` (npm and GitHub Release tarballs, from a `companion-v*` tag; npm trusted publishing, a token only for the first publish) |
 
 ## Risks
 
