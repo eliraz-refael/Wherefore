@@ -35,6 +35,8 @@ export const WorkerHandlers = WorkerRpcs.toLayer(Effect.gen(function*() {
     mark_open: ({ id }) => store.markOpen(id),
     remove_item: ({ id }) => store.removeItem(id),
     restore_item: ({ removed }) => store.restoreItem(removed),
+    remove_tab: ({ id, index, url }) => store.removeTab(id, { index, url }),
+    restore_tab: ({ removed }) => store.restoreTab(removed),
     update_settings: ({ settings }) => store.updateSettings(settings),
     reset_store_key: ({ key }) => Effect.map(store.resetKey(key), (backupKey) => ({ backupKey })),
     // Every save also sweeps runs whose page is gone, so a new run marks the one a closed page left.

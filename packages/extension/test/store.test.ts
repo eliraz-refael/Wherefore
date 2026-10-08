@@ -130,6 +130,33 @@ describe("Store item operations", () => {
       expect(missing).toMatchObject({ _tag: "ItemNotFound", id: "zzz" })
     }))
 
+  it.effect("removes and restores one tab; the last tab takes the item with it", () =>
+    Effect.gen(function*() {
+      const chrome = new FakeChrome()
+      const store = makeStore(chrome.api)
+      const second = { title: "CI", url: "https://ci.example/run/1", domain: "ci.example" }
+      yield* store.saveItems([item("a"), { ...item("b"), tabs: [...item("b").tabs, second] }])
+      const tabsOf = (items: ReadonlyArray<SavedItem>, id: string) =>
+        items.find((i) => i.id === id)?.tabs.map((tab) => tab.url)
+
+      const removal = yield* store.removeTab(SavedItemId.make("b"), { index: 0, url: "https://github.com/acme/api/pull/b" })
+      assert(removal._tag === "TabRemoved")
+      expect(tabsOf(yield* store.read(itemsKey), "b")).toEqual(["https://ci.example/run/1"])
+      yield* store.restoreTab(removal.removed)
+      expect(tabsOf(yield* store.read(itemsKey), "b")).toEqual(["https://github.com/acme/api/pull/b", "https://ci.example/run/1"])
+
+      const last = yield* store.removeTab(SavedItemId.make("a"), { index: 0, url: "https://github.com/acme/api/pull/a" })
+      assert(last._tag === "ItemRemoved")
+      expect((yield* store.read(itemsKey)).map((i) => i.id)).toEqual(["b"])
+      yield* store.restoreItem(last.removed)
+      expect((yield* store.read(itemsKey)).map((i) => i.id)).toEqual(["a", "b"])
+
+      const noTab = yield* Effect.flip(store.removeTab(SavedItemId.make("a"), { index: 0, url: "https://nope.example/" }))
+      expect(noTab).toMatchObject({ _tag: "TabNotFound", id: "a" })
+      const noItem = yield* Effect.flip(store.removeTab(SavedItemId.make("zzz"), { index: 0, url: "https://nope.example/" }))
+      expect(noItem).toMatchObject({ _tag: "ItemNotFound", id: "zzz" })
+    }))
+
   it.effect("serializes concurrent writes", () =>
     Effect.gen(function*() {
       const store = makeStore(new FakeChrome().api)

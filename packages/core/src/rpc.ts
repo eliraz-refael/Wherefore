@@ -25,7 +25,7 @@ import { CompanionStatus } from "./companion.ts"
 import { RunId, SavedItemId, TabId, UndoToken, WindowId } from "./ids.ts"
 import { Answer, Question } from "./intention.ts"
 import { CompanionRunMode, Run, RunMode } from "./run.ts"
-import { RemovedItem, SavedItem } from "./savedItem.ts"
+import { RemovedItem, RemovedTab, SavedItem, TabRemoval } from "./savedItem.ts"
 import { Settings } from "./settings.ts"
 import { ListTabs, ReadPages, ToolError, WakeAndReadPages } from "./tools.ts"
 import { Rpc, RpcGroup } from "./unstable.ts"
@@ -57,6 +57,12 @@ export class StoreUnreadable extends Schema.TaggedError<StoreUnreadable>()("Stor
 /** No saved item has this id. */
 export class ItemNotFound extends Schema.TaggedError<ItemNotFound>()("ItemNotFound", {
   id: SavedItemId
+}) {}
+
+/** The saved item has no tab with this URL (any more). */
+export class TabNotFound extends Schema.TaggedError<TabNotFound>()("TabNotFound", {
+  id: SavedItemId,
+  url: Schema.String
 }) {}
 
 /**
@@ -185,6 +191,17 @@ export const StoreRpcs = RpcGroup.make(
   /** Deletes an item. Keep the result to undo with `restore_item`. */
   Rpc.make("remove_item", { payload: { id: SavedItemId }, success: RemovedItem, error: ItemError }),
   Rpc.make("restore_item", { payload: { removed: RemovedItem }, error: StoreError }),
+  /**
+   * Deletes one of an item's tabs: the one at `index` if its URL is `url`, else the first with that
+   * URL. Its last tab takes the item with it (`ItemRemoved`, undone with `restore_item`); otherwise
+   * undo with `restore_tab`. No browser tab is closed.
+   */
+  Rpc.make("remove_tab", {
+    payload: { id: SavedItemId, index: Schema.Int, url: Schema.String },
+    success: TabRemoval,
+    error: Schema.Union([ItemNotFound, TabNotFound, StoreUnreadable, BrowserError])
+  }),
+  Rpc.make("restore_tab", { payload: { removed: RemovedTab }, error: StoreError }),
   /** Replaces the settings. Returns them as stored. */
   Rpc.make("update_settings", { payload: { settings: Settings }, success: Settings, error: StoreError }),
   /**

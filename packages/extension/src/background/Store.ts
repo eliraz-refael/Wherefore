@@ -24,9 +24,12 @@ import {
   markDone,
   type ProfileId,
   type RemovedItem,
+  type RemovedTab,
   removeItem,
+  removeTab,
   reopen,
   restoreItem,
+  restoreTab,
   type Run,
   type RunId,
   type RunIndexEntry,
@@ -36,6 +39,8 @@ import {
   setReviewed,
   type Settings,
   StoreUnreadable,
+  type TabRemoval,
+  TabNotFound,
   upsertRunIndex
 } from "@wherefore/core"
 import { Clock, Context, DateTime, Effect, Layer, Option, Semaphore } from "effect"
@@ -69,6 +74,12 @@ export class Store extends Context.Service<Store, {
   readonly markOpen: (id: SavedItemId) => Effect.Effect<SavedItem, ItemNotFound | StoreError>
   readonly removeItem: (id: SavedItemId) => Effect.Effect<RemovedItem, ItemNotFound | StoreError>
   readonly restoreItem: (removed: RemovedItem) => Effect.Effect<void, StoreError>
+  /** Deletes one of an item's tabs (core's `removeTab`); its last tab removes the item. */
+  readonly removeTab: (
+    id: SavedItemId,
+    tab: { readonly index: number; readonly url: string }
+  ) => Effect.Effect<TabRemoval, ItemNotFound | TabNotFound | StoreError>
+  readonly restoreTab: (removed: RemovedTab) => Effect.Effect<void, StoreError>
   readonly updateSettings: (settings: Settings) => Effect.Effect<Settings, StoreError>
   /** Records what the ACP agent offered on its last run (Settings shows it). */
   readonly saveAgentOptions: (options: AgentOptions) => Effect.Effect<void, StoreError>
@@ -323,6 +334,16 @@ export const make = (chrome: ChromeApi["Service"]): Store["Service"] => {
           onSome: ({ items: rest, removed }) => Effect.succeed([removed, rest] as const)
         })),
     restoreItem: (removed) => update(itemsKey, (items) => Effect.succeed([undefined, restoreItem(items, removed)] as const)),
+    removeTab: (id, tab) =>
+      update(itemsKey, (items) =>
+        Option.match(removeTab(items, id, tab), {
+          onNone: () =>
+            Effect.fail(
+              items.some((item) => item.id === id) ? new TabNotFound({ id, url: tab.url }) : new ItemNotFound({ id })
+            ),
+          onSome: ({ items: rest, removal }) => Effect.succeed([removal, rest] as const)
+        })),
+    restoreTab: (removed) => update(itemsKey, (items) => Effect.succeed([undefined, restoreTab(items, removed)] as const)),
     updateSettings: (settings) => update(settingsKey, () => Effect.succeed([settings, settings] as const)),
     saveAgentOptions: (options) => update(agentOptionsKey, () => Effect.succeed([undefined, options] as const)),
     saveRun,
