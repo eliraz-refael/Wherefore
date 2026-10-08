@@ -5,7 +5,7 @@
  * apps). The sticky bar saves and closes everything at once, with undo.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import type { Run } from "@wherefore/core"
+import { type Run, savedTitle } from "@wherefore/core"
 import { useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
 import { saveAndClose, saveOne, updateChoice } from "../actions.ts"
@@ -24,8 +24,7 @@ import {
   type ReviewTab,
   saveBarLabel,
   tagOf,
-  taskOf,
-  titleOf
+  taskOf
 } from "../review.ts"
 import { ChevronIcon, SiteBadge, SubHeader, TabText, TagChip } from "./common.tsx"
 
@@ -147,7 +146,7 @@ function ResultCard(props: {
   const saved = choice?.savedAs !== undefined
   const kept = choice?.keepOpen === true
   const task = taskOf(result, choice)
-  const title = titleOf(result.intention)
+  const title = savedTitle(result.intention)
   const count = result.tabs.length
   const meta = saved ? "Saved" : kept ? "Keeping open" : undefined
 

@@ -13,6 +13,7 @@ import {
   reopen,
   restoreItem,
   restoreTab,
+  savedTitle,
   TabRemoval,
   tagLabel
 } from "../src/index.ts"
@@ -151,6 +152,12 @@ describe("newSavedItem", () => {
       expect(item.title).toBe("Decide between two standing desks")
       expect(item).not.toHaveProperty("due")
     }
+  })
+
+  it("savedTitle: the trimmed short_title, else the intention's title", () => {
+    expect(savedTitle({ title: "Decide between two standing desks", shortTitle: " Standing desk " })).toBe("Standing desk")
+    expect(savedTitle({ title: "Decide between two standing desks", shortTitle: "  " })).toBe("Decide between two standing desks")
+    expect(savedTitle({ title: "Decide between two standing desks" })).toBe("Decide between two standing desks")
   })
 
   it("saves nothing for done, dead and app", () => {
