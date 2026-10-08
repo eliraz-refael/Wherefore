@@ -341,10 +341,10 @@ describe("install copies the CLI to a stable place", () => {
       log.push([command.file, ...command.args].join(" "))
       return { ok: true, output: "" }
     })
-  const runScript = (file: string, args: ReadonlyArray<string>) =>
+  const runScript = (file: string, args: ReadonlyArray<string>, cwd?: string) =>
     Effect.promise(() =>
       new Promise<string>((resolve, reject) =>
-        execFile(file, [...args], (error, stdout) => (error ? reject(error) : resolve(stdout.trim()))))
+        execFile(file, [...args], { cwd }, (error, stdout) => (error ? reject(error) : resolve(stdout.trim()))))
     )
   const runWrapper = (home: Location) => runScript(wrapperPath(home), ["chrome-extension://x/"])
   /** What the fake bundle prints: which file ran, and its arguments. */
@@ -436,9 +436,89 @@ describe("install copies the CLI to a stable place", () => {
       expect(yield* install("0.1.0", [])).toMatchObject({ migrated: false })
 
       const removed = yield* applyUninstall(planUninstall(home), record(commands))
-      expect(removed).toEqual(expect.arrayContaining([copiesDir(home), launcherPath(home), wrapperPath(home)]))
-      expect(existsSync(copiesDir(home))).toBe(false)
+      expect(removed).toEqual(expect.arrayContaining([launcherPath(home), wrapperPath(home), NodePath.join(copiesDir(home), "0.1.0")]))
+      // Only the copies: what else is in the directory stays, and so does the directory.
+      expect(yield* installedCopies(home)).toEqual([])
+      expect(yield* Effect.promise(() => Fs.readdir(copiesDir(home)))).toEqual(["notes"])
       expect(existsSync(launcherPath(home))).toBe(false)
+
+      // With nothing else in it, the directory goes too.
+      yield* Effect.promise(() => Fs.rm(NodePath.join(copiesDir(home), "notes"), { recursive: true }))
+      yield* install("0.1.0", [])
+      expect(yield* applyUninstall(planUninstall(home), record(commands))).toContain(copiesDir(home))
+      expect(existsSync(copiesDir(home))).toBe(false)
+    }))
+
+  it.live("bakes a relative WHEREFORE_HOME resolved, so the scripts find it from any directory", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      // Relative to this process's cwd, as a user might type it; Chrome and Claude Code start the
+      // scripts elsewhere: here, a directory deeper than the path has `..`s, so resolving it there
+      // can't land on the same place by chance (from /, extra `..`s would).
+      const relative = NodePath.relative(process.cwd(), location.home)
+      expect(NodePath.isAbsolute(relative)).toBe(false)
+      const home: Location = {
+        ...location,
+        platform: process.platform === "darwin" ? "darwin" : "linux",
+        env: { WHEREFORE_HOME: relative }
+      }
+      expect(stateDir(home)).toBe(location.home)
+      const running = NodePath.join(location.home, "npx", "dist", "cli.js")
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.dirname(running), { recursive: true })
+        // Where this CLI would look for its state: WHEREFORE_HOME, resolved against its own cwd.
+        await Fs.writeFile(
+          running,
+          'import { resolve } from "node:path"\nconsole.log("state", resolve(process.env.WHEREFORE_HOME ?? "(unset)"))\n'
+        )
+      })
+      const elsewhere = NodePath.join(location.home, ...relative.split(NodePath.sep).map((_, index) => `d${index}`), "deeper")
+      yield* Effect.promise(() => Fs.mkdir(elsewhere, { recursive: true }))
+      yield* installCompanion(home, {
+        running,
+        version: "0.1.0",
+        node: process.execPath,
+        env: home.env,
+        liveVersions: [],
+        exists: (path) => path.startsWith(location.home) && existsSync(path),
+        run: record([])
+      })
+      expect(yield* runScript(launcherPath(home), ["mcp"], elsewhere)).toBe(`state ${location.home}`)
+      expect(yield* runScript(wrapperPath(home), ["chrome-extension://x/"], elsewhere)).toBe(`state ${location.home}`)
+    }))
+
+  it.live("rewrites the wrapper and the launcher by rename, never in place", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux", env: {} }
+      const running = NodePath.join(location.home, "npx", "dist", "cli.js")
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.dirname(running), { recursive: true })
+        await Fs.writeFile(running, BUNDLE)
+      })
+      const install = installCompanion(home, {
+        running,
+        version: "0.1.0",
+        node: process.execPath,
+        env: {},
+        liveVersions: [],
+        exists: (path) => path.startsWith(location.home) && existsSync(path),
+        run: record([])
+      })
+      yield* install
+      const scripts = [wrapperPath(home), launcherPath(home)]
+      const before = yield* Effect.promise(() => Promise.all(scripts.map((file) => Fs.stat(file))))
+      yield* install
+      const after = yield* Effect.promise(() => Promise.all(scripts.map((file) => Fs.stat(file))))
+      // A new file each time (written aside, then renamed over the old one), not the old one
+      // truncated and rewritten in place, which a shell running it at that moment could read half of.
+      expect(after[0]?.ino).not.toBe(before[0]?.ino)
+      expect(after[1]?.ino).not.toBe(before[1]?.ino)
+      expect(after.map((stat) => stat.mode & 0o777)).toEqual([0o755, 0o755])
+      // No temporary files left behind.
+      expect((yield* Effect.promise(() => Fs.readdir(stateDir(home)))).filter((name) => name.endsWith(".tmp"))).toEqual([])
     }))
 
   it.live("runs a checkout's build in place", () =>

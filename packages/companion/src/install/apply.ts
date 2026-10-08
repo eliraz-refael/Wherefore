@@ -7,7 +7,7 @@ import { execFile } from "node:child_process"
 import * as Fs from "node:fs/promises"
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
 import { Effect, Schema } from "effect"
-import { type Location, pathFor } from "../paths.ts"
+import { type Location, pathFor, platformOf, stateDir } from "../paths.ts"
 import {
   browserTargets,
   claudeMcpAdd,
@@ -71,9 +71,18 @@ export const applyInstall = (location: Location, plan: InstallPlan, run: RunComm
       yield* attempt(`cannot create ${dir}`, () => Fs.mkdir(dir, { recursive: true, ...(index === 0 ? { mode: 0o700 } : {}) }))
     }
     for (const file of plan.files) {
+      // Atomically (a temporary file, then a rename): Chrome may start the wrapper, and Claude Code
+      // the launcher, while `install` rewrites them; a shell reading one mid-write would run half.
       yield* attempt(`cannot write ${file.path}`, async () => {
-        await Fs.writeFile(file.path, file.content, { mode: file.mode })
-        if (posix) await Fs.chmod(file.path, file.mode)
+        const temp = `${file.path}.${process.pid}.tmp`
+        try {
+          await Fs.writeFile(temp, file.content, { mode: file.mode })
+          if (posix) await Fs.chmod(temp, file.mode)
+          await Fs.rename(temp, file.path)
+        } catch (error) {
+          await Fs.rm(temp, { force: true })
+          throw error
+        }
       })
     }
     const failedBrowsers = new Map<string, string>()
@@ -99,12 +108,14 @@ export const installedWrapper = (location: Location) => scriptTargets(location, 
 /** The Node and CLI the launcher runs, if `install` wrote one. */
 export const installedLauncher = (location: Location) => scriptTargets(location, launcherPath(location))
 
-/** The versions in the copies directory, oldest name first. */
-export const installedCopies = (location: Location) =>
+const versionsIn = (dir: string) =>
   Effect.map(
-    Effect.promise(() => Fs.readdir(copiesDir(location)).catch(() => [] as Array<string>)),
+    Effect.promise(() => Fs.readdir(dir).catch(() => [] as Array<string>)),
     (names) => names.filter(isVersionName).sort()
   )
+
+/** The versions in the copies directory, oldest name first. */
+export const installedCopies = (location: Location) => versionsIn(copiesDir(location))
 
 /**
  * Copies the running CLI to `to`, atomically (a temporary file, then a rename), so a broker
@@ -129,21 +140,28 @@ export const copyCli = (platform: Location["platform"], from: string, to: string
     }
   })
 
-/** Removes the copies not in `kept`. Never fails: a copy that can't be removed is reported. */
-export const pruneCopies = (location: Location, kept: ReadonlySet<string>) =>
+/**
+ * Removes the copies in `copies` (a copies directory) not in `kept`; entries that aren't version
+ * directories are left alone. Never fails: a copy that can't be removed is reported.
+ */
+const removeCopies = (platform: Location["platform"], copies: string, kept: ReadonlySet<string>) =>
   Effect.gen(function*() {
-    const path = pathFor(location.platform)
-    const names = yield* Effect.promise(() => Fs.readdir(copiesDir(location)).catch(() => [] as Array<string>))
+    const path = pathFor(platform)
+    const names = yield* versionsIn(copies)
     const removed: Array<string> = []
     const failed: Array<string> = []
     for (const name of prunableCopies(names, kept)) {
-      const dir = path.join(copiesDir(location), name)
+      const dir = path.join(copies, name)
       const ok = yield* Effect.promise(() => Fs.rm(dir, { recursive: true, force: true }).then(() => true, () => false))
       if (ok) removed.push(dir)
       else failed.push(dir)
     }
     return { removed, failed }
   })
+
+/** Removes the copies not in `kept`. Never fails: a copy that can't be removed is reported. */
+export const pruneCopies = (location: Location, kept: ReadonlySet<string>) =>
+  removeCopies(location.platform, copiesDir(location), kept)
 
 export interface InstallInput {
   /** The CLI file that is running `install` (resolved). */
@@ -186,12 +204,16 @@ export interface InstallReport {
  */
 export const installCompanion = (location: Location, input: InstallInput) =>
   Effect.gen(function*() {
+    // A relative WHEREFORE_HOME would resolve against whatever directory Chrome or Claude Code
+    // starts the wrapper or launcher in: bake the state directory this install uses.
+    const home = input.env["WHEREFORE_HOME"]
+    const env = home !== undefined && home !== "" ? { ...input.env, WHEREFORE_HOME: stateDir(location) } : input.env
     const previous = (yield* installedWrapper(location))?.cli
     const hadLauncher = yield* exists(launcherPath(location))
     const checkout = isCheckoutBuild(location.platform, input.running, input.exists)
     const target = cliTarget(location, input.running, input.version, checkout)
     if (target.copy) yield* copyCli(location.platform, input.running, target.cli)
-    const plan = planInstall(location, { node: input.node, cli: target.cli, env: input.env }, input.exists)
+    const plan = planInstall(location, { node: input.node, cli: target.cli, env }, input.exists)
     const registered = yield* applyInstall(location, plan, input.run)
     const pruned = yield* pruneCopies(
       location,
@@ -220,8 +242,15 @@ export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
     }
     for (const dir of plan.dirs) {
       if (!(yield* exists(dir))) continue
-      yield* attempt(`cannot remove ${dir}`, () => Fs.rm(dir, { recursive: true, force: true }))
-      removed.push(dir)
+      // Only the version directories `install` made, then the directory if that empties it:
+      // anything else someone put there stays.
+      const copies = yield* removeCopies(platformOf(process.platform), dir, new Set())
+      if (copies.failed.length > 0) {
+        return yield* new InstallError({ message: `cannot remove ${copies.failed.join(", ")}` })
+      }
+      const empty = yield* Effect.promise(() => Fs.rmdir(dir).then(() => true, () => false))
+      if (empty) removed.push(dir)
+      else removed.push(...copies.removed)
     }
     for (const command of plan.commands) {
       // Deleting a key that isn't there fails; that is the state we want anyway.
