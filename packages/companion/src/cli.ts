@@ -22,9 +22,9 @@ import { RUN_ID_PATTERN } from "./acp/command.ts"
 import { connectBroker } from "./broker/BrokerClient.ts"
 import { callerOf, runNativeHost } from "./broker/nativeHost.ts"
 import { liveDeps, makeRegistry } from "./broker/registry.ts"
-import { applyInstall, applyUninstall, installedHosts, runCommand } from "./install/apply.ts"
+import { applyUninstall, installCompanion, installedCopies, installedHosts, installedWrapper, runCommand } from "./install/apply.ts"
 import { serveMcp } from "./mcp/McpSurface.ts"
-import { claudeMcpAdd, planInstall, planUninstall, stableNode, wrapperPath } from "./install/plan.ts"
+import { claudeMcpAdd, copiesDir, copyVersion, planUninstall, shellArg, stableNode, wrapperPath } from "./install/plan.ts"
 import { type Location, platformOf, registryDir } from "./paths.ts"
 import {
   Command,
@@ -40,7 +40,7 @@ import { COMPANION_VERSION } from "./version.ts"
 
 const location = (): Location => ({ platform: platformOf(process.platform), home: homedir(), env: process.env })
 
-/** This file, as installed: the wrapper script runs it. */
+/** This file, resolved: `install` copies it to its stable place (or, in a checkout, points at it). */
 const cliPath = () => realpathSync(process.argv[1] ?? "")
 
 /** The Node to pin in the wrapper: a stable `PATH` entry for this binary when there is one (plan.ts). */
@@ -64,10 +64,19 @@ const install = Command.make("install", {}, () =>
   Effect.gen(function*() {
     const where = location()
     const node = nodePath(where)
-    const plan = planInstall(where, { node, cli: cliPath(), env: process.env }, existsSync)
-    const registered = yield* applyInstall(where, plan, runCommand)
+    const live = yield* makeRegistry(liveDeps(where)).entries
+    const report = yield* installCompanion(where, {
+      running: cliPath(),
+      version: COMPANION_VERSION,
+      node,
+      env: process.env,
+      liveVersions: live.map((entry) => entry.companionVersion),
+      exists: existsSync,
+      run: runCommand
+    })
+    const cli = report.cli
     yield* Console.log(`Registered the Wherefore native messaging host (${NATIVE_HOST_NAME}):`)
-    for (const entry of registered) {
+    for (const entry of report.registered) {
       const state = entry.failed !== undefined
         ? `FAILED: ${entry.failed}`
         : entry.skipped !== undefined
@@ -75,19 +84,35 @@ const install = Command.make("install", {}, () =>
         : `ok  ${entry.where ?? ""}`
       yield* Console.log(`  ${pad(entry.browser, 12)} ${state}`)
     }
+    const place = report.checkout
+      ? "This is a build in a checkout, so Chrome runs it in place: a rebuild takes effect the next time Chrome starts the host."
+      : report.copied
+      ? `Copied the companion (${COMPANION_VERSION}) to ${copiesDir(where)}, so it keeps working when npm clears its cache or upgrades this package.`
+      : `The companion (${COMPANION_VERSION}) runs from ${copiesDir(where)}.`
     yield* Console.log(`
 Chrome runs ${wrapperPath(where)},
-which starts ${node} ${cliPath()}.
+which starts ${node} ${cli}.
 Only the Wherefore extension (${EXTENSION_ORIGIN}) may start it.
-
+${place}`)
+    if (report.pruned.removed.length > 0) yield* Console.log(`Removed older copies: ${report.pruned.removed.join(", ")}`)
+    if (report.pruned.failed.length > 0) {
+      yield* Console.log(`Couldn't remove older copies (still in use?): ${report.pruned.failed.join(", ")}`)
+    }
+    const moved = report.previous !== undefined && report.previous !== cli
+    yield* Console.log(`
 Next: reload the extension in chrome://extensions (or press "Check again" in its Settings),
-then run \`node ${cliPath()} status\` to see the connected profiles.
+then run \`${shellArg(where.platform, node)} ${shellArg(where.platform, cli)} status\` to see the connected profiles.
 
 To use Wherefore from Claude Code (MCP mode), add its MCP server once:
 
-  ${claudeMcpAdd(where.platform, node, cliPath())}
+  ${claudeMcpAdd(where.platform, node, cli)}
 
 then ask Claude Code to tidy up your tabs, with the Wherefore side panel open.`)
+    if (moved) {
+      yield* Console.log(`
+The companion moved (it was ${report.previous}). If you added it to Claude Code before,
+remove it first (\`claude mcp remove --scope user wherefore\`), then add it with the line above.`)
+    }
   })).pipe(Command.withDescription("Register the native messaging host with Chrome and other Chromium browsers"))
 
 const uninstall = Command.make("uninstall", {}, () =>
@@ -101,12 +126,24 @@ const uninstall = Command.make("uninstall", {}, () =>
     yield* Console.log(
       "\nRunning brokers stop when Chrome closes their connection (reload the extension, or restart Chrome)."
     )
-  })).pipe(Command.withDescription("Remove the native messaging host's manifests, registry keys and wrapper script"))
+  })).pipe(Command.withDescription("Remove the native messaging host's manifests, registry keys, wrapper script and copies"))
 
 const status = Command.make("status", {}, () =>
   Effect.gen(function*() {
     const where = location()
-    yield* Console.log(`Wherefore companion ${COMPANION_VERSION}`)
+    yield* Console.log(`Wherefore companion ${COMPANION_VERSION} (this command)`)
+    const wrapper = yield* installedWrapper(where)
+    const copies = yield* installedCopies(where)
+    if (wrapper === undefined) yield* Console.log(`\nChrome runs: nothing yet (no ${wrapperPath(where)}); run \`install\`.`)
+    else {
+      const version = copyVersion(where, wrapper.cli)
+      const what = version !== undefined
+        ? `the installed copy of ${version}`
+        : `a build outside ${copiesDir(where)} (a checkout, or an install from before the copies)`
+      const gone = existsSync(wrapper.cli) ? "" : "  GONE: run `install` again"
+      yield* Console.log(`\nChrome runs ${what}:\n  ${wrapper.node} ${wrapper.cli}${gone}`)
+    }
+    if (copies.length > 0) yield* Console.log(`Copies in ${copiesDir(where)}: ${copies.join(", ")}`)
     yield* Console.log(`\nNative messaging host ${NATIVE_HOST_NAME}:`)
     for (const browser of yield* installedHosts(where, runCommand)) {
       const host = browser.host

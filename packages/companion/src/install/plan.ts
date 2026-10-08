@@ -13,6 +13,15 @@
  * starts inherits (`PATH` to find `npx`, `CLAUDE_CONFIG_DIR` for the user's Claude Code login), and
  * the pinned Node and CLI (`WHEREFORE_NODE`, `WHEREFORE_CLI`), which the broker gives the agent for
  * its MCP server. API keys are never copied.
+ *
+ * The wrapper runs a copy of this CLI that `install` keeps in the state directory,
+ * `<state>/companion/<version>/cli.js`, not the file that ran `install`: under `npx` that is a
+ * cache entry npm may clear, and a global install is replaced by an upgrade. A build in a checkout
+ * of the repository (a `src/cli.ts` next to its `dist/`) runs in place instead, so a developer's
+ * rebuild takes effect without another `install`. Older copies are pruned, except the one the
+ * previous install ran and any a live broker reports: a running broker starts `wherefore mcp`
+ * from its own copy for every ACP tidy-up, and a `claude mcp add` line may still point at the
+ * previous one.
  */
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
 import { type Location, pathFor, type Platform, stateDir } from "../paths.ts"
@@ -104,6 +113,75 @@ export const manifestFileName = `${NATIVE_HOST_NAME}.json`
 export const wrapperPath = (location: Location): string =>
   pathFor(location.platform).join(stateDir(location), location.platform === "win32" ? "native-host.bat" : "native-host.sh")
 
+/** Where `install` keeps its copies of the CLI, one directory per version. */
+export const copiesDir = (location: Location): string => pathFor(location.platform).join(stateDir(location), "companion")
+
+/** A copies directory entry that `install` made: a version, e.g. `0.1.0` or `1.2.0-rc.1`. */
+const VERSION_NAME = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+
+export const isVersionName = (name: string): boolean => VERSION_NAME.test(name)
+
+/** The copy of version `version`: `<state>/companion/<version>/cli.js`. */
+export const copyPath = (location: Location, version: string): string =>
+  pathFor(location.platform).join(copiesDir(location), version, "cli.js")
+
+/** The version of the copy at `cli`, when `cli` is one of `install`'s copies. */
+export const copyVersion = (location: Location, cli: string): string | undefined => {
+  const path = pathFor(location.platform)
+  const parts = path.relative(copiesDir(location), cli).split(path.sep)
+  return parts.length === 2 && parts[1] === "cli.js" && parts[0] !== undefined && isVersionName(parts[0]) ? parts[0] : undefined
+}
+
+/**
+ * Whether `cli` (a bundled `dist/cli.js`) was built in a checkout of the repository: its sources,
+ * `src/cli.ts`, sit next to `dist/`. The published package ships no sources.
+ */
+export const isCheckoutBuild = (platform: Platform, cli: string, exists: (path: string) => boolean): boolean => {
+  const path = pathFor(platform)
+  return exists(path.join(path.dirname(path.dirname(cli)), "src", "cli.ts"))
+}
+
+/** What the wrapper runs, and whether `install` must copy the running CLI there first. */
+export interface CliTarget {
+  readonly cli: string
+  readonly copy: boolean
+}
+
+/**
+ * The CLI the wrapper should run: a checkout's build in place; anything else (npx's cache, a
+ * global install, a tarball) as this version's copy, copied unless it is the copy already.
+ */
+export const cliTarget = (location: Location, running: string, version: string, checkout: boolean): CliTarget => {
+  if (checkout) return { cli: running, copy: false }
+  const target = copyPath(location, version)
+  const path = pathFor(location.platform)
+  const same = location.platform === "win32"
+    ? path.resolve(running).toLowerCase() === path.resolve(target).toLowerCase()
+    : path.resolve(running) === path.resolve(target)
+  return { cli: target, copy: !same }
+}
+
+/**
+ * The copies to keep: the one installed now, the one the previous wrapper ran (a broker may still
+ * be starting from it, and Claude Code's MCP config may point at it), and every version a live
+ * broker reports.
+ */
+export const keptVersions = (
+  location: Location,
+  input: { readonly installed: string; readonly previous: string | undefined; readonly live: ReadonlyArray<string> }
+): ReadonlySet<string> => {
+  const kept = new Set(input.live)
+  for (const cli of [input.installed, input.previous]) {
+    const version = cli === undefined ? undefined : copyVersion(location, cli)
+    if (version !== undefined) kept.add(version)
+  }
+  return kept
+}
+
+/** Entries of the copies directory to remove: versions not kept. Anything else is left alone. */
+export const prunableCopies = (names: ReadonlyArray<string>, kept: ReadonlySet<string>): ReadonlyArray<string> =>
+  names.filter((name) => isVersionName(name) && !kept.has(name)).sort()
+
 /** The Windows host manifest lives in the state directory; the registry points at it. */
 export const windowsManifestPath = (location: Location): string =>
   pathFor(location.platform).join(stateDir(location), manifestFileName)
@@ -117,7 +195,7 @@ export const batEscape = (value: string): string => value.replaceAll("%", "%%")
 export interface WrapperInput {
   /** The Node binary that ran `install`. */
   readonly node: string
-  /** This CLI's bundled entry point (dist/cli.js). */
+  /** The CLI the wrapper runs: this version's copy, or a checkout's dist/cli.js (`cliTarget`). */
   readonly cli: string
   readonly env: Readonly<Record<string, string | undefined>>
 }
@@ -289,6 +367,8 @@ export const planInstall = (
 export interface UninstallPlan {
   /** Files to remove if present. */
   readonly files: ReadonlyArray<string>
+  /** Directories to remove with everything in them, if present: the CLI's copies. */
+  readonly dirs: ReadonlyArray<string>
   readonly commands: ReadonlyArray<Command & { readonly browser: string }>
 }
 
@@ -302,11 +382,11 @@ export const planUninstall = (location: Location): UninstallPlan => {
     if (target.registryKey !== undefined) commands.push({ ...registryDelete(target.registryKey), browser: target.browser })
     if (target.manifestDir !== undefined) files.push(path.join(target.manifestDir, manifestFileName))
   }
-  return { files, commands }
+  return { files, dirs: [copiesDir(location)], commands }
 }
 
 /** Quotes an argument for the user's shell when it needs it (POSIX shells, or cmd/PowerShell). */
-const shellArg = (platform: Platform, text: string): string =>
+export const shellArg = (platform: Platform, text: string): string =>
   /^[A-Za-z0-9_./:\\=@+-]+$/.test(text)
     ? text
     : platform === "win32"

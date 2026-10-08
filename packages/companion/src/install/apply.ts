@@ -1,6 +1,7 @@
 /**
  * Carries out an install or uninstall plan (plan.ts) on the real file system and registry, and
- * reads back what is installed for `status`. Commands run without a shell.
+ * reads back what is installed for `status`. Commands run without a shell. `install` also copies
+ * the running CLI to its stable place and prunes older copies (plan.ts explains which).
  */
 import { execFile } from "node:child_process"
 import * as Fs from "node:fs/promises"
@@ -9,9 +10,16 @@ import { Effect, Schema } from "effect"
 import { type Location, pathFor } from "../paths.ts"
 import {
   browserTargets,
+  cliTarget,
   type Command,
+  copiesDir,
   type InstallPlan,
+  isCheckoutBuild,
+  isVersionName,
+  keptVersions,
   manifestFileName,
+  planInstall,
+  prunableCopies,
   registryQuery,
   type UninstallPlan,
   windowsManifestPath,
@@ -77,6 +85,104 @@ export const applyInstall = (location: Location, plan: InstallPlan, run: RunComm
     })
   })
 
+/** The Node and CLI the installed wrapper starts, if there is a wrapper `install` wrote. */
+export const installedWrapper = (location: Location) =>
+  Effect.map(
+    Effect.promise(() => Fs.readFile(wrapperPath(location), "utf8").catch(() => undefined)),
+    (script) => (script === undefined ? undefined : wrapperTargets(location.platform, script))
+  )
+
+/** The versions in the copies directory, oldest name first. */
+export const installedCopies = (location: Location) =>
+  Effect.map(
+    Effect.promise(() => Fs.readdir(copiesDir(location)).catch(() => [] as Array<string>)),
+    (names) => names.filter(isVersionName).sort()
+  )
+
+/**
+ * Copies the running CLI to `to`, atomically (a temporary file, then a rename), so a broker
+ * starting from it meanwhile reads the old file or the new one, never half of one. The bundle is
+ * an ES module: a `package.json` next to it says so, whatever package.json sits above the state
+ * directory.
+ */
+export const copyCli = (platform: Location["platform"], from: string, to: string) =>
+  attempt(`cannot copy ${from} to ${to}`, async () => {
+    const path = pathFor(platform)
+    const dir = path.dirname(to)
+    await Fs.mkdir(dir, { recursive: true, mode: 0o700 })
+    await Fs.writeFile(path.join(dir, "package.json"), `${JSON.stringify({ type: "module" })}\n`, { mode: 0o644 })
+    const temp = `${to}.${process.pid}.tmp`
+    try {
+      await Fs.copyFile(from, temp)
+      if (platform !== "win32") await Fs.chmod(temp, 0o755)
+      await Fs.rename(temp, to)
+    } catch (error) {
+      await Fs.rm(temp, { force: true })
+      throw error
+    }
+  })
+
+/** Removes the copies not in `kept`. Never fails: a copy that can't be removed is reported. */
+export const pruneCopies = (location: Location, kept: ReadonlySet<string>) =>
+  Effect.gen(function*() {
+    const path = pathFor(location.platform)
+    const names = yield* Effect.promise(() => Fs.readdir(copiesDir(location)).catch(() => [] as Array<string>))
+    const removed: Array<string> = []
+    const failed: Array<string> = []
+    for (const name of prunableCopies(names, kept)) {
+      const dir = path.join(copiesDir(location), name)
+      const ok = yield* Effect.promise(() => Fs.rm(dir, { recursive: true, force: true }).then(() => true, () => false))
+      if (ok) removed.push(dir)
+      else failed.push(dir)
+    }
+    return { removed, failed }
+  })
+
+export interface InstallInput {
+  /** The CLI file that is running `install` (resolved). */
+  readonly running: string
+  readonly version: string
+  /** The Node to pin (plan.ts `stableNode`). */
+  readonly node: string
+  readonly env: Readonly<Record<string, string | undefined>>
+  /** The versions live brokers report (registry entries): their copies are kept. */
+  readonly liveVersions: ReadonlyArray<string>
+  readonly exists: (path: string) => boolean
+  readonly run: RunCommand
+}
+
+export interface InstallReport {
+  /** What the wrapper runs now. */
+  readonly cli: string
+  /** Whether `install` copied the running CLI there. */
+  readonly copied: boolean
+  /** Whether it runs a checkout's build in place. */
+  readonly checkout: boolean
+  /** What the wrapper ran before, if there was one. */
+  readonly previous: string | undefined
+  readonly registered: ReadonlyArray<Registered>
+  readonly pruned: { readonly removed: ReadonlyArray<string>; readonly failed: ReadonlyArray<string> }
+}
+
+/**
+ * `install`: copy the CLI to its stable place (unless it runs from a checkout), write the wrapper
+ * and manifests that point at it, then prune the copies nothing needs any more.
+ */
+export const installCompanion = (location: Location, input: InstallInput) =>
+  Effect.gen(function*() {
+    const previous = (yield* installedWrapper(location))?.cli
+    const checkout = isCheckoutBuild(location.platform, input.running, input.exists)
+    const target = cliTarget(location, input.running, input.version, checkout)
+    if (target.copy) yield* copyCli(location.platform, input.running, target.cli)
+    const plan = planInstall(location, { node: input.node, cli: target.cli, env: input.env }, input.exists)
+    const registered = yield* applyInstall(location, plan, input.run)
+    const pruned = yield* pruneCopies(
+      location,
+      keptVersions(location, { installed: target.cli, previous, live: input.liveVersions })
+    )
+    return { cli: target.cli, copied: target.copy, checkout, previous, registered, pruned } satisfies InstallReport
+  })
+
 export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
   Effect.gen(function*() {
     const removed: Array<string> = []
@@ -84,6 +190,11 @@ export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
       if (!(yield* exists(file))) continue
       yield* attempt(`cannot remove ${file}`, () => Fs.rm(file, { force: true }))
       removed.push(file)
+    }
+    for (const dir of plan.dirs) {
+      if (!(yield* exists(dir))) continue
+      yield* attempt(`cannot remove ${dir}`, () => Fs.rm(dir, { recursive: true, force: true }))
+      removed.push(dir)
     }
     for (const command of plan.commands) {
       // Deleting a key that isn't there fails; that is the state we want anyway.

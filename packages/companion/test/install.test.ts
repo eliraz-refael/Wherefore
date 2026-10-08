@@ -1,14 +1,22 @@
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
 import * as Fs from "node:fs/promises"
 import * as NodePath from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
 import { Effect } from "effect"
-import { applyInstall, applyUninstall, installedHosts, type RunCommand } from "../src/install/apply.ts"
+import { applyInstall, applyUninstall, installCompanion, installedCopies, installedHosts, installedWrapper, type RunCommand } from "../src/install/apply.ts"
 import {
   batEscape,
   browserTargets,
+  cliTarget,
+  copiesDir,
+  copyPath,
+  copyVersion,
+  isCheckoutBuild,
+  keptVersions,
   planInstall,
+  prunableCopies,
   planUninstall,
   shQuote,
   stableNode,
@@ -146,6 +154,41 @@ describe("install plan", () => {
   })
 })
 
+describe("the CLI's stable copy", () => {
+  const npx = "/Users/Ada Lovelace/.npm/_npx/1a2b/node_modules/@eliraz-refael/wherefore/dist/cli.js"
+
+  it("lives in the state directory, one directory per version", () => {
+    expect(copyPath(mac, "0.1.0")).toBe("/Users/Ada Lovelace/.wherefore/companion/0.1.0/cli.js")
+    expect(copyPath({ ...linux, env: { WHEREFORE_HOME: "/srv/wf" } }, "0.1.0")).toBe("/srv/wf/companion/0.1.0/cli.js")
+    expect(copyPath(windows, "0.1.0")).toBe("C:\\Users\\Ada Lovelace\\.wherefore\\companion\\0.1.0\\cli.js")
+    expect(copyVersion(mac, copyPath(mac, "1.2.0-rc.1"))).toBe("1.2.0-rc.1")
+    expect(copyVersion(windows, "c:\\users\\ada lovelace\\.wherefore\\companion\\0.1.0\\cli.js")).toBe("0.1.0")
+    expect(copyVersion(mac, npx)).toBeUndefined()
+    expect(copyVersion(mac, "/Users/Ada Lovelace/.wherefore/companion/notes/cli.js")).toBeUndefined()
+    expect(copyVersion(mac, "/Users/Ada Lovelace/.wherefore/companion/0.1.0/dist/cli.js")).toBeUndefined()
+    expect(planUninstall(mac).dirs).toEqual(["/Users/Ada Lovelace/.wherefore/companion"])
+  })
+
+  it("is what the wrapper runs, except for a build in a checkout, which runs in place", () => {
+    const checkout = "/Users/Ada Lovelace/src/Wherefore/packages/companion/dist/cli.js"
+    const sources = (path: string) => path === "/Users/Ada Lovelace/src/Wherefore/packages/companion/src/cli.ts"
+    expect(isCheckoutBuild("darwin", checkout, sources)).toBe(true)
+    expect(isCheckoutBuild("darwin", npx, sources)).toBe(false)
+    expect(cliTarget(mac, checkout, "0.1.0", true)).toEqual({ cli: checkout, copy: false })
+    expect(cliTarget(mac, npx, "0.1.0", false)).toEqual({ cli: copyPath(mac, "0.1.0"), copy: true })
+    // `install` run from the copy itself has nothing to copy.
+    expect(cliTarget(mac, copyPath(mac, "0.1.0"), "0.1.0", false)).toEqual({ cli: copyPath(mac, "0.1.0"), copy: false })
+  })
+
+  it("prunes only versions nothing uses: not the new one, the previous one, or a live broker's", () => {
+    const kept = keptVersions(mac, { installed: copyPath(mac, "0.3.0"), previous: copyPath(mac, "0.2.0"), live: ["0.1.1"] })
+    expect([...kept].sort()).toEqual(["0.1.1", "0.2.0", "0.3.0"])
+    expect(prunableCopies(["0.3.0", "0.2.0", "0.1.1", "0.1.0", "0.0.9", "notes", ".DS_Store"], kept)).toEqual(["0.0.9", "0.1.0"])
+    // A checkout's build or an older install outside the copies keeps nothing extra.
+    expect([...keptVersions(mac, { installed: "/src/dist/cli.js", previous: undefined, live: [] })]).toEqual([])
+  })
+})
+
 describe("stableNode", () => {
   const real: Record<string, string> = {
     "/nix/store/abc-nodejs-22/bin/node": "/nix/store/abc-nodejs-22/bin/node",
@@ -234,5 +277,106 @@ describe("install on disk", () => {
       const removed = yield* applyUninstall(planUninstall(home), record(commands))
       expect(removed).toContain(wrapperPath(home))
       expect((yield* installedHosts(home, record(commands)))[0]?.host._tag).toBe("Absent")
+    }))
+})
+
+describe("install copies the CLI to a stable place", () => {
+  const record = (log: Array<string>): RunCommand => (command) =>
+    Effect.sync(() => {
+      log.push([command.file, ...command.args].join(" "))
+      return { ok: true, output: "" }
+    })
+  const runWrapper = (home: Location) =>
+    Effect.promise(() =>
+      new Promise<string>((resolve, reject) =>
+        execFile(wrapperPath(home), ["chrome-extension://x/"], (error, stdout) => (error ? reject(error) : resolve(stdout.trim()))))
+    )
+  // An ES module, like the real bundle: the copy must run as one wherever it lands.
+  const BUNDLE = 'import { argv } from "node:process"\nconsole.log("ran", argv.slice(2).join(" "))\n'
+
+  it.live("copies from npx's cache, keeps working once the cache is gone, prunes, and uninstalls", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux" }
+      const commands: Array<string> = []
+      const cache = NodePath.join(location.home, "npx", "node_modules", "@eliraz-refael", "wherefore")
+      const running = NodePath.join(cache, "dist", "cli.js")
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.dirname(running), { recursive: true })
+        await Fs.writeFile(running, BUNDLE)
+      })
+      const install = (version: string, liveVersions: ReadonlyArray<string>) =>
+        installCompanion(home, {
+          running,
+          version,
+          node: process.execPath,
+          env: {},
+          liveVersions,
+          exists: (path) => path.startsWith(location.home) && existsSync(path),
+          run: record(commands)
+        })
+
+      const first = yield* install("0.0.3", [])
+      expect(first).toMatchObject({ cli: copyPath(home, "0.0.3"), copied: true, checkout: false, previous: undefined })
+      // Older copies, one a live broker still runs from, and something that isn't a copy.
+      yield* Effect.promise(async () => {
+        for (const name of ["0.0.1", "0.0.2", "notes"]) {
+          await Fs.mkdir(NodePath.join(copiesDir(home), name), { recursive: true })
+        }
+      })
+
+      const second = yield* install("0.1.0", ["0.0.2"])
+      expect(second).toMatchObject({ cli: copyPath(home, "0.1.0"), copied: true, previous: copyPath(home, "0.0.3") })
+      expect(second.pruned).toEqual({ removed: [NodePath.join(copiesDir(home), "0.0.1")], failed: [] })
+      expect(yield* installedCopies(home)).toEqual(["0.0.2", "0.0.3", "0.1.0"])
+      expect(yield* Effect.promise(() => Fs.readdir(copiesDir(home)))).toContain("notes")
+      expect((yield* installedWrapper(home))?.cli).toBe(copyPath(home, "0.1.0"))
+      const copy = yield* Effect.promise(() => Fs.stat(copyPath(home, "0.1.0")))
+      expect(copy.mode & 0o777).toBe(0o755)
+
+      // npm clears its cache: Chrome's wrapper doesn't care.
+      yield* Effect.promise(() => Fs.rm(NodePath.join(location.home, "npx"), { recursive: true }))
+      expect(yield* runWrapper(home)).toBe("ran native-host chrome-extension://x/")
+      expect((yield* installedHosts(home, record(commands)))[0]?.host._tag).toBe("Installed")
+
+      // The copy itself gone: `status` says to install again.
+      yield* Effect.promise(() => Fs.rm(copyPath(home, "0.1.0")))
+      expect((yield* installedHosts(home, record(commands)))[0]?.host).toMatchObject({
+        _tag: "Different",
+        problem: expect.stringContaining("which is gone")
+      })
+
+      const removed = yield* applyUninstall(planUninstall(home), record(commands))
+      expect(removed).toContain(copiesDir(home))
+      expect(existsSync(copiesDir(home))).toBe(false)
+    }))
+
+  it.live("runs a checkout's build in place", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux" }
+      const checkout = NodePath.join(location.home, "Wherefore", "packages", "companion")
+      const running = NodePath.join(checkout, "dist", "cli.js")
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.join(checkout, "dist"), { recursive: true })
+        await Fs.mkdir(NodePath.join(checkout, "src"), { recursive: true })
+        await Fs.writeFile(NodePath.join(checkout, "package.json"), JSON.stringify({ type: "module" }))
+        await Fs.writeFile(NodePath.join(checkout, "src", "cli.ts"), "")
+        await Fs.writeFile(running, BUNDLE)
+      })
+      const report = yield* installCompanion(home, {
+        running,
+        version: "0.1.0",
+        node: process.execPath,
+        env: {},
+        liveVersions: [],
+        exists: (path) => path.startsWith(location.home) && existsSync(path),
+        run: record([])
+      })
+      expect(report).toMatchObject({ cli: running, copied: false, checkout: true })
+      expect(existsSync(copiesDir(home))).toBe(false)
+      expect(yield* runWrapper(home)).toBe("ran native-host chrome-extension://x/")
     }))
 })
