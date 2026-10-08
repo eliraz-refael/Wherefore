@@ -1,10 +1,10 @@
 /**
  * React glue: run panel Effects with the registry's services, show their outcome in the toast,
- * and move focus after an in-place update.
+ * move focus after an in-place update, and render again when the day changes.
  */
 import { RegistryContext, useAtomSet } from "@effect/atom-react"
 import { Cause, Effect, Exit, Option } from "effect"
-import { useCallback, useContext } from "react"
+import { useCallback, useContext, useEffect, useState } from "react"
 import { Atom, AtomRegistry } from "../unstable.ts"
 import { describeError, type Done, type PanelEffect } from "./actions.ts"
 import { panelRuntime, toastAtom } from "./atoms.ts"
@@ -83,4 +83,19 @@ const focusWhenThere = (find: () => HTMLElement | null): void => {
     else if (tries++ < 10) setTimeout(attempt, 16)
   }
   setTimeout(attempt, 0)
+}
+
+/**
+ * Renders again at the next local midnight, and at each one after (one timer, set again each
+ * time), so what a screen says about today moves on with the calendar. Read the time with
+ * `Date.now()` while rendering. A timer that fires early just sets itself again.
+ */
+export const useNewDay = (): void => {
+  const [day, setDay] = useState(0)
+  useEffect(() => {
+    const midnight = new Date()
+    midnight.setHours(24, 0, 0, 0)
+    const timer = setTimeout(() => setDay((n) => n + 1), midnight.getTime() - Date.now())
+    return () => clearTimeout(timer)
+  }, [day])
 }

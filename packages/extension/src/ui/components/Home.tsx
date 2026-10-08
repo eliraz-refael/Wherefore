@@ -22,7 +22,7 @@ import {
 import { itemsAtom, openTabsAtom, runsAtom, screenAtom } from "../atoms.ts"
 import { type DueView, dueView } from "../dates.ts"
 import { displayDomain, isWebUrl } from "../format.ts"
-import { focusIdSoon, focusSoon, useAct } from "../hooks.ts"
+import { focusIdSoon, focusSoon, useAct, useNewDay } from "../hooks.ts"
 import { listSections, metaLine, openItems, TAG_ORDER, type TagFilter, tagCounts } from "../list.ts"
 import {
   CalendarIcon,
@@ -148,6 +148,8 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
   const [picked, setPicked] = useState<TagFilter>("all")
   const open = openItems(items)
   const doneCount = items.length - open.length
+  // Dates read "today" from the clock: render again when the day changes.
+  useNewDay()
   const nowMs = Date.now()
   const counts = tagCounts(open)
   // A chip goes when its last item does; the list then shows everything again, and stays that way

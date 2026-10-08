@@ -3,7 +3,7 @@
  * The side panel, rendered with React in a DOM, over the real worker, Store and agent (fake
  * browser, scripted model). See test/fakes/panel.tsx.
  */
-import { afterEach, describe, expect, it } from "@effect/vitest"
+import { afterEach, describe, expect, it, vi } from "@effect/vitest"
 import {
   type AgentEvent,
   AgentNotLoggedIn,
@@ -13,7 +13,7 @@ import {
   INTERRUPTED_MESSAGE,
   Run
 } from "@wherefore/core"
-import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, waitFor, within } from "@testing-library/react"
 import { type Cause, Effect, Exit, Queue, Schema, Scope, Stream } from "effect"
 import { localToday, parseCalendarDate, shortDate } from "../src/ui/dates.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
@@ -594,6 +594,53 @@ describe("Your list", () => {
 
     fireEvent.click(view.ui.getByRole("button", { name: "Tax form" }))
     expect(within(view.ui.getByRole("article", { name: "Tax form" })).getByText(`Due ${dayText(-2)}, 2 days ago`)).toBeTruthy()
+  })
+
+  it("renders again at local midnight: a date due today turns overdue, with no reload", async () => {
+    // Fake clock and timers that still run with real time, so the worker and Store work as usual.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["Date", "setTimeout", "clearTimeout"] })
+    try {
+      vi.setSystemTime(new Date(2026, 9, 8, 23, 59, 50))
+      const chrome = new FakeChrome({
+        local: {
+          settings: SETTINGS,
+          items: itemsEnvelope([
+            storedItem({
+              id: "tax",
+              task: "Tax form",
+              due: { date: "2026-10-08", kind: "due", source: "" },
+              tabs: [{ title: "Tax", url: "https://tax.example/" }]
+            }),
+            storedItem({
+              id: "rent",
+              task: "Rent",
+              due: { date: "2026-10-09", kind: "due", source: "" },
+              tabs: [{ title: "Rent", url: "https://rent.example/" }]
+            })
+          ])
+        }
+      })
+      const app = make(chrome)
+      await app.start()
+      const view = app.open()
+      await view.ui.findByRole("heading", { level: 1, name: "2 things you meant to do" })
+      const pill = (title: string) => view.ui.getByRole("article", { name: title }).querySelector(".wf-date-pill")?.textContent
+      expect(pill("Tax form")).toBe("Thu 8 Oct")
+
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+      })
+      await waitFor(() => expect(pill("Tax form")).toBe("Overdue · Thu 8 Oct"))
+      expect(pill("Rent")).toBe("Fri 9 Oct")
+
+      // The timer set itself again, for the midnight after.
+      await act(async () => {
+        vi.advanceTimersByTime(24 * 60 * 60 * 1000)
+      })
+      await waitFor(() => expect(pill("Rent")).toBe("Overdue · Fri 9 Oct"))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("renders what the model wrote as text, never as markup", async () => {
