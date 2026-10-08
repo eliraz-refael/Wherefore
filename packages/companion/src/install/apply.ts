@@ -10,6 +10,7 @@ import { Effect, Schema } from "effect"
 import { type Location, pathFor } from "../paths.ts"
 import {
   browserTargets,
+  claudeMcpAdd,
   cliTarget,
   type Command,
   copiesDir,
@@ -17,6 +18,7 @@ import {
   isCheckoutBuild,
   isVersionName,
   keptVersions,
+  launcherPath,
   manifestFileName,
   planInstall,
   prunableCopies,
@@ -85,12 +87,17 @@ export const applyInstall = (location: Location, plan: InstallPlan, run: RunComm
     })
   })
 
-/** The Node and CLI the installed wrapper starts, if there is a wrapper `install` wrote. */
-export const installedWrapper = (location: Location) =>
+const scriptTargets = (location: Location, file: string) =>
   Effect.map(
-    Effect.promise(() => Fs.readFile(wrapperPath(location), "utf8").catch(() => undefined)),
+    Effect.promise(() => Fs.readFile(file, "utf8").catch(() => undefined)),
     (script) => (script === undefined ? undefined : wrapperTargets(location.platform, script))
   )
+
+/** The Node and CLI the installed wrapper starts, if there is a wrapper `install` wrote. */
+export const installedWrapper = (location: Location) => scriptTargets(location, wrapperPath(location))
+
+/** The Node and CLI the launcher runs, if `install` wrote one. */
+export const installedLauncher = (location: Location) => scriptTargets(location, launcherPath(location))
 
 /** The versions in the copies directory, oldest name first. */
 export const installedCopies = (location: Location) =>
@@ -160,6 +167,15 @@ export interface InstallReport {
   readonly checkout: boolean
   /** What the wrapper ran before, if there was one. */
   readonly previous: string | undefined
+  /** The launcher, which runs `cli` too. */
+  readonly launcher: string
+  /** The line that adds the MCP server to Claude Code: the same for every install in this state directory. */
+  readonly mcpCommand: string
+  /**
+   * An install from before the launcher was here: a `claude mcp add` line from then named a Node
+   * and a `cli.js`, which may be gone.
+   */
+  readonly migrated: boolean
   readonly registered: ReadonlyArray<Registered>
   readonly pruned: { readonly removed: ReadonlyArray<string>; readonly failed: ReadonlyArray<string> }
 }
@@ -171,6 +187,7 @@ export interface InstallReport {
 export const installCompanion = (location: Location, input: InstallInput) =>
   Effect.gen(function*() {
     const previous = (yield* installedWrapper(location))?.cli
+    const hadLauncher = yield* exists(launcherPath(location))
     const checkout = isCheckoutBuild(location.platform, input.running, input.exists)
     const target = cliTarget(location, input.running, input.version, checkout)
     if (target.copy) yield* copyCli(location.platform, input.running, target.cli)
@@ -180,7 +197,17 @@ export const installCompanion = (location: Location, input: InstallInput) =>
       location,
       keptVersions(location, { installed: target.cli, previous, live: input.liveVersions })
     )
-    return { cli: target.cli, copied: target.copy, checkout, previous, registered, pruned } satisfies InstallReport
+    return {
+      cli: target.cli,
+      copied: target.copy,
+      checkout,
+      previous,
+      launcher: launcherPath(location),
+      mcpCommand: claudeMcpAdd(location),
+      migrated: previous !== undefined && !hadLauncher,
+      registered,
+      pruned
+    } satisfies InstallReport
   })
 
 export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>

@@ -22,9 +22,17 @@ import { RUN_ID_PATTERN } from "./acp/command.ts"
 import { connectBroker } from "./broker/BrokerClient.ts"
 import { callerOf, runNativeHost } from "./broker/nativeHost.ts"
 import { liveDeps, makeRegistry } from "./broker/registry.ts"
-import { applyUninstall, installCompanion, installedCopies, installedHosts, installedWrapper, runCommand } from "./install/apply.ts"
+import {
+  applyUninstall,
+  installCompanion,
+  installedCopies,
+  installedHosts,
+  installedLauncher,
+  installedWrapper,
+  runCommand
+} from "./install/apply.ts"
 import { serveMcp } from "./mcp/McpSurface.ts"
-import { claudeMcpAdd, copiesDir, copyVersion, planUninstall, shellArg, stableNode, wrapperPath } from "./install/plan.ts"
+import { copiesDir, copyVersion, launcherPath, planUninstall, shellArg, stableNode, wrapperPath } from "./install/plan.ts"
 import { type Location, platformOf, registryDir } from "./paths.ts"
 import {
   Command,
@@ -98,20 +106,22 @@ ${place}`)
     if (report.pruned.failed.length > 0) {
       yield* Console.log(`Couldn't remove older copies (still in use?): ${report.pruned.failed.join(", ")}`)
     }
-    const moved = report.previous !== undefined && report.previous !== cli
     yield* Console.log(`
+${report.launcher} runs it from your terminal too, whichever version is installed.
+
 Next: reload the extension in chrome://extensions (or press "Check again" in its Settings),
-then run \`${shellArg(where.platform, node)} ${shellArg(where.platform, cli)} status\` to see the connected profiles.
+then run \`${shellArg(where.platform, report.launcher)} status\` to see the connected profiles.
 
-To use Wherefore from Claude Code (MCP mode), add its MCP server once:
+To use Wherefore from Claude Code (MCP mode), add its MCP server once (the line stays the same
+across updates):
 
-  ${claudeMcpAdd(where.platform, node, cli)}
+  ${report.mcpCommand}
 
 then ask Claude Code to tidy up your tabs, with the Wherefore side panel open.`)
-    if (moved) {
+    if (report.migrated) {
       yield* Console.log(`
-The companion moved (it was ${report.previous}). If you added it to Claude Code before,
-remove it first (\`claude mcp remove --scope user wherefore\`), then add it with the line above.`)
+If you added Wherefore to Claude Code with an older companion, its line named a Node and a cli.js.
+Replace it once: \`claude mcp remove --scope user wherefore\`, then the line above.`)
     }
   })).pipe(Command.withDescription("Register the native messaging host with Chrome and other Chromium browsers"))
 
@@ -143,6 +153,14 @@ const status = Command.make("status", {}, () =>
       const gone = existsSync(wrapper.cli) ? "" : "  GONE: run `install` again"
       yield* Console.log(`\nChrome runs ${what}:\n  ${wrapper.node} ${wrapper.cli}${gone}`)
     }
+    const launcher = yield* installedLauncher(where)
+    yield* Console.log(
+      launcher === undefined
+        ? `Launcher (for Claude Code): none (no ${launcherPath(where)}); run \`install\`.`
+        : `Launcher (for Claude Code) ${launcherPath(where)} runs:\n  ${launcher.node} ${launcher.cli}${
+          existsSync(launcher.cli) ? "" : "  GONE: run `install` again"
+        }`
+    )
     if (copies.length > 0) yield* Console.log(`Copies in ${copiesDir(where)}: ${copies.join(", ")}`)
     yield* Console.log(`\nNative messaging host ${NATIVE_HOST_NAME}:`)
     for (const browser of yield* installedHosts(where, runCommand)) {

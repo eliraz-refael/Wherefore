@@ -60,8 +60,12 @@ wrapper runs that copy, so it keeps working when npm clears `npx`'s cache or a g
 upgraded. It removes older copies, except the previous one and any a running broker still uses.
 A build in a checkout (a `src/` next to its `dist/`) is not copied: the wrapper runs it in place, so a
 rebuild takes effect the next time Chrome starts the host, and if you move the checkout you run
-`install` again. `status` shows which copy Chrome runs, and reports a wrapper whose `cli.js` or
-pinned Node is gone as `needs install`.
+`install` again. `install` also writes a launcher, `~/.wherefore/wherefore` (`wherefore.cmd` on
+Windows), which runs the current copy (or the checkout's build) with the same Node and passes its
+arguments on: `~/.wherefore/wherefore status` works whichever way you installed, and it is what
+Claude Code's MCP config names, so that config survives updates. `status` shows which copy Chrome
+and the launcher run, and reports a wrapper whose `cli.js` or pinned Node is gone as
+`needs install`.
 
 Then reload the extension in `chrome://extensions`, or press **Check again** in its Settings.
 Settings → Companion should say "Connected".
@@ -72,8 +76,8 @@ agent the companion starts gets them.
 
 **Updating.** Run `npx @eliraz-refael/wherefore@latest install` (or install the newer tarball, or
 pull and rebuild a checkout, then run `install`), and reload the extension: the extension and the
-companion refuse each other's older versions (Settings says which one to update). If you added the
-MCP server to Claude Code (below), `install` says when its path changed.
+companion refuse each other's older versions (Settings says which one to update). Claude Code's MCP
+config (below) needs no change: it runs the launcher, which now runs the new version.
 
 ## Check it
 
@@ -138,15 +142,16 @@ the companion's environment, and gets the same MCP server and the same permissio
 `wherefore mcp` is an MCP server on stdio. It finds every connected Chrome profile through the
 brokers, and gives an MCP client (Claude Code, or any other) Wherefore's five tools: `list_tabs`,
 `read_pages`, `wake_and_read_pages`, `ask_user` and `submit_intentions`, plus a `tidy_up` prompt.
-`install` prints the command that adds it to Claude Code, with the same pinned Node and copy:
+`install` prints the command that adds it to Claude Code, through the launcher:
 
 ```sh
-claude mcp add --scope user wherefore -- /path/to/node /Users/you/.wherefore/companion/0.1.0/cli.js mcp
+claude mcp add --scope user wherefore -- /Users/you/.wherefore/wherefore mcp
 ```
 
-After an update the copy's path changes: `claude mcp remove --scope user wherefore`, then add the
-line `install` printed. (`install` keeps the previous copy, so the old line works until the next
-update.)
+(on Windows, `-- cmd /c C:\Users\you\.wherefore\wherefore.cmd mcp`). The line is the same after
+every update, so you add it once. If you added Wherefore to Claude Code with an older companion
+(whose line named `node` and a `cli.js`), `install` says so once: run
+`claude mcp remove --scope user wherefore`, then add the new line.
 
 Then open the Wherefore side panel and ask Claude Code to tidy up your tabs (or run its
 `/mcp__wherefore__tidy_up` prompt). While it works:
@@ -188,6 +193,7 @@ when Chrome closes its connection: reload the extension or restart Chrome.
 | | |
 | --- | --- |
 | `~/.wherefore/native-host.sh` / `.bat` | What Chrome runs |
+| `~/.wherefore/wherefore` / `wherefore.cmd` | The launcher: the current companion, for Claude Code and your terminal |
 | `~/.wherefore/companion/<version>/cli.js` | The copy of the companion it starts (`%USERPROFILE%\.wherefore\companion\…` on Windows) |
 | `~/.wherefore/run/<profile>.json` | One file per live broker: profile id, pid, socket, versions, access token |
 | `~/.wherefore/run/<profile>.<pid>.sock` | The broker's socket (macOS, Linux). On Windows a named pipe, `\\.\pipe\wherefore-…` |
@@ -196,7 +202,8 @@ when Chrome closes its connection: reload the extension or restart Chrome.
 access token to its entry, and refuses any request that doesn't carry it, so only your own
 processes can call it, even where the socket is visible to others (Windows named pipes). Set
 `WHEREFORE_HOME` to use another directory, both when you run `install` (it is copied into the
-wrapper) and when you run the CLI (including the `claude mcp add` line: add `-e WHEREFORE_HOME=…`).
+wrapper and the launcher, so the `claude mcp add` line needs nothing more) and when you run the
+CLI some other way.
 
 ## Troubleshooting
 
