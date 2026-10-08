@@ -439,6 +439,26 @@ describe("Your list", () => {
     await waitFor(() => expect(document.activeElement?.hasAttribute("data-screen-heading")).toBe(true))
   })
 
+  it("once a chip's last item leaves, a new item with that tag doesn't bring the old filter back", async () => {
+    const chrome = listChrome()
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+    await view.ui.findByRole("heading", { level: 1, name: "5 things you meant to do" })
+
+    fireEvent.click(view.ui.getByRole("button", { name: "Read 1" }))
+    fireEvent.click(view.ui.getByRole("button", { name: "Mark done: Read the Effect guide" }))
+    await waitFor(() => expect(view.ui.queryByRole("button", { name: "Read 1" })).toBeNull())
+
+    // A tidy-up elsewhere saves a new item to read.
+    const saved = storedItem({ id: "g", task: "Read the Vite notes", tag: "read", tabs: [{ title: "Notes", url: "https://vite.dev/notes" }] })
+    Effect.runSync(chrome.api.storage.local.set({ items: itemsEnvelope([...storedData(chrome, "items"), saved]) }))
+    expect(await view.ui.findByRole("button", { name: "Read 1" })).toBeTruthy()
+    expect(view.ui.getByRole("button", { name: "All 5" }).getAttribute("aria-pressed")).toBe("true")
+    expect(view.ui.getByRole("button", { name: "Read 1" }).getAttribute("aria-pressed")).toBe("false")
+    expect(rowTitles(view.ui)).toHaveLength(5)
+  })
+
   /** A day `offset` days from today, as YYYY-MM-DD in the user's zone. */
   const dayFromToday = (offset: number): string => {
     const now = new Date()

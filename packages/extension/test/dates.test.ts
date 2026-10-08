@@ -17,6 +17,8 @@ describe("calendar days", () => {
     expect(parseCalendarDate("2026-02-29")).toBeUndefined()
     expect(parseCalendarDate("2026-13-01")).toBeUndefined()
     expect(parseCalendarDate("12 Oct")).toBeUndefined()
+    // Years 0-99 are those years, as core's CalendarDate reads them (not 1900-1999).
+    expect(parseCalendarDate("0050-03-01")).toEqual({ year: 50, month: 3, day: 1 })
   })
 
   it("today is the local calendar day, from just after midnight to just before the next", () => {

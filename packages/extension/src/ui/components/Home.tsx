@@ -150,7 +150,9 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
   const doneCount = items.length - open.length
   const nowMs = Date.now()
   const counts = tagCounts(open)
-  // A chip goes when its last item does; the list then shows everything again.
+  // A chip goes when its last item does; the list then shows everything again, and stays that way
+  // when an item with that tag is saved later (adjusting state while rendering, as React allows).
+  if (picked !== "all" && counts[picked] === 0) setPicked("all")
   const filter: TagFilter = picked !== "all" && counts[picked] === 0 ? "all" : picked
   const { comingUp, anytime } = listSections(open, { filter, query })
 

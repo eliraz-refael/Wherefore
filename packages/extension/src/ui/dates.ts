@@ -28,8 +28,8 @@ export const parseCalendarDate = (text: string): CalendarDay | undefined => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
   if (match === null) return undefined
   const day = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) }
-  // Date.UTC rolls 31 Feb over to March: a real date comes back unchanged.
-  const back = new Date(dayNumber(day) * DAY_MS)
+  // The clock rolls 31 Feb over to March: a real date comes back unchanged.
+  const back = utcMidnight(day)
   return back.getUTCFullYear() === day.year && back.getUTCMonth() + 1 === day.month && back.getUTCDate() === day.day
     ? day
     : undefined
@@ -41,13 +41,23 @@ export const localToday = (nowMs: number): CalendarDay => {
   return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() }
 }
 
-/** Days since 1970-01-01 on the calendar: the UTC clock is only used to count, never for a zone. */
-const dayNumber = (day: CalendarDay): number => Date.UTC(day.year, day.month - 1, day.day) / DAY_MS
+/**
+ * The day's midnight on the UTC clock, which is only used to count, never for a zone.
+ * setUTCFullYear, not Date.UTC: Date.UTC reads years 0-99 as 1900-1999 (as core's CalendarDate).
+ */
+const utcMidnight = (day: CalendarDay): Date => {
+  const date = new Date(0)
+  date.setUTCFullYear(day.year, day.month - 1, day.day)
+  return date
+}
+
+/** Days since 1970-01-01 on the calendar. */
+const dayNumber = (day: CalendarDay): number => utcMidnight(day).getTime() / DAY_MS
 
 /** Calendar days from `from` to `to`: 1 when `to` is the day after, negative when it is before. */
 export const daysBetween = (from: CalendarDay, to: CalendarDay): number => dayNumber(to) - dayNumber(from)
 
-const weekday = (day: CalendarDay): string => WEEKDAYS[new Date(dayNumber(day) * DAY_MS).getUTCDay()] ?? ""
+const weekday = (day: CalendarDay): string => WEEKDAYS[utcMidnight(day).getUTCDay()] ?? ""
 
 /** "Sun 12 Oct"; with the year when it isn't this year: "Sun 3 Jan 2027". */
 export const shortDate = (day: CalendarDay, today: CalendarDay): string =>
