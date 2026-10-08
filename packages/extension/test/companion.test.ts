@@ -72,6 +72,7 @@ describe("companion link", () => {
           "https://github.com/acme/api/pull/412?token=REDACTED",
           "https://example.com/"
         ])
+        expect(reply.rpc.exit.value.today).toMatch(/^\d{4}-\d{2}-\d{2} \((Sun|Mon|Tue|Wed|Thu|Fri|Sat)\)$/)
 
         // Only the tab tools are served on this port.
         host.send({ _tag: "ToWorker", rpc: { _tag: "Request", id: "8", tag: "close_tabs", payload: { tabIds: [1], keepWindowAlive: 1 }, headers: [] } })

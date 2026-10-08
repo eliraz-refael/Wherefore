@@ -38,11 +38,27 @@ const readParams = (maxTabs: number) =>
 
 const PageReads = Schema.Struct({ pages: Schema.Array(PageRead) })
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const
+
+/**
+ * The user's local calendar day at `epochMs`, as list_tabs reports it: "2026-10-08 (Thu)". Local,
+ * not UTC: just after midnight it is already the new day where the user is.
+ */
+export const localDay = (epochMs: number): string => {
+  const date = new Date(epochMs)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} (${WEEKDAYS[date.getDay()]})`
+}
+
 export const ListTabs = Tool.make("list_tabs", {
   description:
-    "List every open tab: id, window, title, redacted URL, group, asleep, last used, opener, duplicates. Call this first.",
+    "List every open tab: id, window, title, redacted URL, group, asleep, last used, opener, duplicates; and today's date. Call this first.",
   success: Schema.Struct({
     tabs: Schema.Array(TabSnapshot),
+    today: Schema.String.annotate({
+      description:
+        "The user's local date and weekday, e.g. \"2026-10-08 (Thu)\". Resolve relative dates in the tabs (\"this Sunday\") against it."
+    }),
     /** MCP mode only: a Chrome profile skipped (busy with another tidy-up, or not answering). */
     notice: Schema.optionalKey(Schema.String.annotate({
       description: "Set when some tabs couldn't be listed, e.g. a Chrome profile was busy; explains which and why."

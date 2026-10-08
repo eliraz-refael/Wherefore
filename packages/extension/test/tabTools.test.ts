@@ -323,7 +323,8 @@ describe("TabTools.reopenTabs", () => {
       const chrome = new FakeChrome({ tabs: [{ id: 1, windowId: 4, url: "https://keep.example/" }] })
       const item: SavedItem = {
         id: SavedItemId.make("item-1"),
-        type: "todo",
+        tag: "do",
+        title: "Auth PR review",
         task: "Finish reviewing the auth PR and leave comments for Dana",
         intention: "Finish reviewing the auth PR",
         why: "Review requested",
@@ -356,7 +357,8 @@ describe("TabTools.reopenTabs with a refused URL", () => {
       })
       const item: SavedItem = {
         id: SavedItemId.make("item-2"),
-        type: "read",
+        tag: "read",
+        title: "Notes",
         task: "Read the notes",
         intention: "Read the notes",
         why: "Saved for later",

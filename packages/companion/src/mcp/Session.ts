@@ -31,6 +31,7 @@ import {
   emptyUsage,
   type Intention,
   IntentionId,
+  localDay,
   type PageRead,
   type ProfileId,
   type Question,
@@ -47,7 +48,7 @@ import {
   UNKNOWN_MODEL
 } from "@wherefore/core"
 import { randomUUID } from "node:crypto"
-import { Cause, DateTime, Deferred, Duration, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
+import { Cause, Clock, DateTime, Deferred, Duration, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
 import type { Broker, Brokers } from "./Brokers.ts"
 import { SessionIds } from "./ids.ts"
 
@@ -103,7 +104,7 @@ export interface SessionOptions {
 export interface Session {
   readonly listTabs: (
     ctx: CallContext
-  ) => Effect.Effect<{ readonly tabs: ReadonlyArray<TabSnapshot>; readonly notice?: string }, ToolError>
+  ) => Effect.Effect<{ readonly tabs: ReadonlyArray<TabSnapshot>; readonly today: string; readonly notice?: string }, ToolError>
   readonly readPages: (
     params: { readonly tabIds: ReadonlyArray<TabId>; readonly maxChars?: number },
     wake: boolean,
@@ -460,6 +461,8 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
                 (error) => (isGone(error) ? "Chrome profile disconnected" : shorten(error.message, 200))
               ).pipe(Effect.result, Effect.map((result) => ({ part, result }))), { concurrency: "unbounded" })
             const tabs: Array<TabSnapshot> = []
+            // Each profile's worker reports the user's local day; they share one machine and one day.
+            let today: string | undefined
             for (const { part, result } of listed) {
               if (Result.isFailure(result)) {
                 if (isGone(result.failure)) {
@@ -473,9 +476,12 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
               // (until then its new run knows no tabs, so its old tab ids stay out of the check).
               current.gone.delete(part.profile)
               for (const tab of result.success.tabs) tabs.push(ids.snapshot(part.profile, tab))
+              today ??= result.success.today
             }
             if (current.runs.size === 0) return yield* new ToolError({ message: NO_BROKERS })
-            return skipped.size === 0 ? { tabs } : { tabs, notice: skippedNotice(skipped) }
+            // No profile listed (every one left meanwhile): this machine's day is the user's too.
+            const day = today ?? localDay(yield* Clock.currentTimeMillis)
+            return skipped.size === 0 ? { tabs, today: day } : { tabs, today: day, notice: skippedNotice(skipped) }
           })
         )
       })

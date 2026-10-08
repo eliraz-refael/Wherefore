@@ -5,12 +5,12 @@
  * apps). The sticky bar saves and closes everything at once, with undo.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { type Run, type TrackerType, trackerTypeLabel } from "@wherefore/core"
+import type { Run } from "@wherefore/core"
 import { useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
 import { saveAndClose, saveOne, updateChoice } from "../actions.ts"
 import { choicesAtom, itemsAtom, openTabsAtom, remapAtom, screenAtom } from "../atoms.ts"
-import { tabCount } from "../format.ts"
+import { type ListSection, SECTION_ORDER, sectionLabel, sectionOf, tabCount, tagIn } from "../format.ts"
 import { focusIdSoon, useAct } from "../hooks.ts"
 import {
   buildReview,
@@ -23,11 +23,10 @@ import {
   type ReviewResult,
   type ReviewTab,
   saveBarLabel,
-  taskOf,
-  typeOf
+  tagOf,
+  taskOf
 } from "../review.ts"
 import { ChevronIcon, SiteBadge, SubHeader, TabText } from "./common.tsx"
-import { TYPE_ORDER } from "./Home.tsx"
 
 /** Results shown before "+ N more". */
 export const RESULTS_SHOWN = 12
@@ -69,9 +68,8 @@ function ReviewBody(
   const [busy, setBusy] = useState(false)
   const plan = planOf(model, choices)
 
-  const ordered = TYPE_ORDER.flatMap((type) =>
-    model.results.filter((result) => typeOf(result, choices[result.intention.id]) === type)
-  )
+  const sectionOfResult = (result: ReviewResult) => sectionOf(tagOf(result, choices[result.intention.id]))
+  const ordered = SECTION_ORDER.flatMap((section) => model.results.filter((result) => sectionOfResult(result) === section))
   const visible = new Set((showAll ? ordered : ordered.slice(0, RESULTS_SHOWN)).map((result) => result.intention.id))
   const hidden = ordered.length - visible.size
 
@@ -91,14 +89,12 @@ function ReviewBody(
         {nothing
           ? <p className="wf-card wf-note">Nothing to tidy: your tabs are on your list already, or in everyday use.</p>
           : null}
-        {TYPE_ORDER.map((type) => {
-          const group = ordered.filter((result) =>
-            visible.has(result.intention.id) && typeOf(result, choices[result.intention.id]) === type
-          )
+        {SECTION_ORDER.map((section) => {
+          const group = ordered.filter((result) => visible.has(result.intention.id) && sectionOfResult(result) === section)
           if (group.length === 0) return null
           return (
-            <section key={type} className="wf-group" aria-labelledby={`review-${type}`}>
-              <h2 id={`review-${type}`} className="wf-group-title">{trackerTypeLabel[type]}</h2>
+            <section key={section} className="wf-group" aria-labelledby={`review-${section}`}>
+              <h2 id={`review-${section}`} className="wf-group-title">{sectionLabel[section]}</h2>
               {group.map((result) => (
                 <ResultCard
                   key={result.intention.id}
@@ -197,14 +193,14 @@ function ResultCard(props: {
                     <select
                       id={typeSelectId}
                       className="wf-select"
-                      value={typeOf(result, choice)}
+                      value={sectionOf(tagOf(result, choice))}
                       onChange={(event) => {
-                        change({ type: event.target.value as TrackerType })
+                        change({ tag: tagIn(event.target.value as ListSection, result.tag) })
                         // The card moves to its new group: keep the focus on this select.
                         focusIdSoon(typeSelectId)
                       }}
                     >
-                      {TYPE_ORDER.map((type) => <option key={type} value={type}>{trackerTypeLabel[type]}</option>)}
+                      {SECTION_ORDER.map((section) => <option key={section} value={section}>{sectionLabel[section]}</option>)}
                     </select>
                   </label>
                 </>

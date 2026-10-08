@@ -66,7 +66,7 @@ const handlers: TriageHandlers = {
   list_tabs: () =>
     Effect.sync(() => {
       listed.push("list_tabs")
-      return { tabs: [{ id: TabId.make(7), window: WindowId.make(1), index: 0, title: "Docs", url: "https://docs.example/" }] }
+      return { tabs: [{ id: TabId.make(7), window: WindowId.make(1), index: 0, title: "Docs", url: "https://docs.example/" }], today: "2026-10-08 (Thu)" }
     }),
   read_pages: () => Effect.die("not used"),
   wake_and_read_pages: () => Effect.die("not used"),
@@ -148,7 +148,8 @@ describe("ModelClient (Anthropic)", () => {
       const result = messages[2]?.content[0]
       expect(result).toMatchObject({ type: "tool_result", tool_use_id: "toolu_1", is_error: false })
       expect(JSON.parse(String(result?.content))).toEqual({
-        tabs: [{ id: 7, window: 1, index: 0, title: "Docs", url: "https://docs.example/" }]
+        tabs: [{ id: 7, window: 1, index: 0, title: "Docs", url: "https://docs.example/" }],
+        today: "2026-10-08 (Thu)"
       })
     }).pipe(withFetch(fetch))
   })

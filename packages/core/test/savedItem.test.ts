@@ -14,13 +14,14 @@ import {
   restoreItem,
   restoreTab,
   TabRemoval,
-  trackerTypeLabel
+  tagLabel
 } from "../src/index.ts"
 import { decodeOk, encodeOk, rejects } from "./helpers.ts"
 
 const storedItem = {
   id: "item-1",
-  type: "todo",
+  tag: "do",
+  title: "Auth PR #412 review",
   task: "Approve or request changes on #412",
   intention: "Finish reviewing the auth PR",
   why: "Review requested yesterday",
@@ -53,10 +54,21 @@ describe("SavedItem", () => {
     expect(encodeOk(SavedItem, item)).toMatchObject({ doneAt: "2026-10-05T08:00:00.000Z" })
   })
 
+  it("keeps a due date, with the phrase it came from", () => {
+    const due = { date: "2026-10-21", kind: "renews", source: "Renews on 21 Oct" }
+    const item = decodeOk(SavedItem, { ...storedItem, due })
+    expect(item.due).toEqual(due)
+    expect(encodeOk(SavedItem, item)).toEqual({ ...storedItem, due })
+    expect(rejects(SavedItem, { ...storedItem, due: { ...due, date: "2026-02-30" } })).toBe(true)
+  })
+
   it("rejects bad input", () => {
     expect(rejects(SavedItem, { ...storedItem, status: "archived" })).toBe(true)
     expect(rejects(SavedItem, { ...storedItem, status: "dropped", doneAt: "2026-10-05T08:00:00.000Z" })).toBe(true)
-    expect(rejects(SavedItem, { ...storedItem, type: "work" })).toBe(true)
+    expect(rejects(SavedItem, { ...storedItem, tag: "work" })).toBe(true)
+    expect(rejects(SavedItem, { ...storedItem, title: "" })).toBe(true)
+    const { tag: _, ...withoutTag } = storedItem
+    expect(rejects(SavedItem, { ...withoutTag, type: "todo" })).toBe(true)
     expect(rejects(SavedItem, { ...storedItem, tabs: [] })).toBe(true)
     expect(rejects(SavedItem, { ...storedItem, task: "" })).toBe(true)
     expect(rejects(SavedItem, { ...storedItem, id: "" })).toBe(true)
@@ -73,9 +85,9 @@ describe("SavedItem", () => {
 
 describe("dispositionOf", () => {
   const cases: ReadonlyArray<[IntentionKind, string]> = [
-    ["work", "Save:todo"],
-    ["decide", "Save:todo"],
-    ["track", "Save:follow_up"],
+    ["work", "Save:do"],
+    ["decide", "Save:decide"],
+    ["track", "Save:track"],
     ["read", "Save:read"],
     ["reference", "Save:keep"],
     ["done", "Close"],
@@ -84,11 +96,11 @@ describe("dispositionOf", () => {
   ]
   it.each(cases)("%s -> %s", (kind, expected) => {
     const disposition = dispositionOf(kind)
-    expect(disposition._tag === "Save" ? `Save:${disposition.type}` : disposition._tag).toBe(expected)
+    expect(disposition._tag === "Save" ? `Save:${disposition.tag}` : disposition._tag).toBe(expected)
   })
 
-  it("labels tracker types as the UI shows them", () => {
-    expect(trackerTypeLabel).toEqual({ todo: "To do", follow_up: "Follow up", read: "Read", keep: "Keep" })
+  it("labels tags as the UI shows them", () => {
+    expect(tagLabel).toEqual({ do: "Do", track: "Track", decide: "Decide", read: "Read", keep: "Keep" })
   })
 })
 
@@ -103,14 +115,19 @@ describe("newSavedItem", () => {
     kind: "decide" as const
   }
 
-  it("makes an open item whose task is the model's next_step", () => {
-    const item = Option.getOrThrow(newSavedItem({ id, intention, tabs: [tab], savedAt }))
+  it("makes an open item whose task is the model's next_step, and title its short_title", () => {
+    const due = { date: "2026-10-12", kind: "expires", source: "Sale ends Sunday" } as const
+    const item = Option.getOrThrow(
+      newSavedItem({ id, intention: { ...intention, shortTitle: " Standing desk ", due }, tabs: [tab], savedAt })
+    )
     expect(item).toEqual({
       id,
-      type: "todo",
+      tag: "decide",
+      title: "Standing desk",
       task: "Pick a standing desk",
       intention: "Decide between two standing desks",
       why: "Comparing prices",
+      due,
       tabs: [tab],
       status: "open",
       savedAt
@@ -124,6 +141,15 @@ describe("newSavedItem", () => {
     for (const source of [withoutNextStep, blank]) {
       const item = Option.getOrThrow(newSavedItem({ id, intention: source, tabs: [tab], savedAt }))
       expect(item.task).toBe("Decide between two standing desks")
+    }
+  })
+
+  it("titles it with the intention's title when there is no usable short_title, and has no due date without one", () => {
+    for (const shortTitle of [undefined, "  "]) {
+      const source = shortTitle === undefined ? intention : { ...intention, shortTitle }
+      const item = Option.getOrThrow(newSavedItem({ id, intention: source, tabs: [tab], savedAt }))
+      expect(item.title).toBe("Decide between two standing desks")
+      expect(item).not.toHaveProperty("due")
     }
   })
 

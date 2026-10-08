@@ -6,7 +6,7 @@ import { McpServer } from "../src/unstable.ts"
 // Architecture A2: core's one Toolkit is what the companion serves over MCP. The real handlers
 // arrive in M2; these stubs only satisfy the types so the tools can be registered.
 const stubHandlers = TriageToolkit.toLayer({
-  list_tabs: () => Effect.succeed({ tabs: [] }),
+  list_tabs: () => Effect.succeed({ tabs: [], today: "2026-10-08 (Thu)" }),
   read_pages: () => Effect.succeed({ pages: [] }),
   wake_and_read_pages: () => Effect.succeed({ pages: [] }),
   ask_user: () => Effect.succeed({ answers: [] }),

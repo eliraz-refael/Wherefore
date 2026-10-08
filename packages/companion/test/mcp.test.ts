@@ -8,7 +8,7 @@ import { KICKOFF, type ProfileId, RunAlreadyActive, TriageToolkit } from "@where
 import { Deferred, Effect } from "effect"
 import { INSTRUCTIONS, PROMPT_NAME } from "../src/mcp/McpSurface.ts"
 import { ASK_ELSEWHERE, NO_BROKERS, PROFILE_GONE, SKIPPED_ANSWER, UNKNOWN_TAB } from "../src/mcp/Session.ts"
-import { type FakeChrome, NO_PANEL, startFakeChrome, tempLocation } from "./fakes.ts"
+import { FAKE_TODAY, type FakeChrome, NO_PANEL, startFakeChrome, tempLocation } from "./fakes.ts"
 import { eventually, runCli, startMcp } from "./mcpProcess.ts"
 
 const WORK = "workworkworkworkworkworkwo" as ProfileId
@@ -94,6 +94,8 @@ describe("wherefore mcp", () => {
 
       const listed = yield* Effect.promise(() => mcp.callTool("list_tabs"))
       expect(listed.isError).toBe(false)
+      // The day the extension reported, passed on unchanged.
+      expect(listed.structured.today).toBe(FAKE_TODAY)
       const tabs: Array<any> = listed.structured.tabs
       // Both profiles have tabs 1 and 2: the model sees four distinct ids, and openers follow them.
       expect(tabs.map((tab) => tab.id).sort()).toEqual([1, 2, 3, 4])

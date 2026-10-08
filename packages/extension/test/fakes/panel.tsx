@@ -8,6 +8,7 @@ import { render, type RenderResult, within } from "@testing-library/react"
 import { Effect, Layer } from "effect"
 import { QuestionsInbox } from "../../src/agent/Questions.ts"
 import { TriageAgent } from "../../src/agent/TriageAgent.ts"
+import { itemsKey } from "../../src/store/keys.ts"
 import { StoreReader } from "../../src/store/StoreReader.ts"
 import { panelLayerAtom } from "../../src/ui/atoms.ts"
 import { App } from "../../src/ui/components/App.tsx"
@@ -70,20 +71,24 @@ export class Panels {
 /** A value as the Store keeps it. */
 export const envelope = (data: unknown) => ({ version: 1, data })
 
+/** The user's list as the Store keeps it, at the current version. */
+export const itemsEnvelope = (data: unknown) => ({ version: itemsKey.version, data })
+
 export const ISO_NOW = () => new Date().toISOString()
 
 /** A saved item in its stored (JSON) form. */
 export const storedItem = (fields: {
   readonly id: string
   readonly task: string
-  readonly type?: "todo" | "follow_up" | "read" | "keep"
+  readonly tag?: "do" | "track" | "decide" | "read" | "keep"
   readonly tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>
   readonly status?: "open" | "done"
   readonly savedAt?: string
   readonly doneAt?: string
 }) => ({
   id: fields.id,
-  type: fields.type ?? "todo",
+  tag: fields.tag ?? "do",
+  title: fields.task,
   task: fields.task,
   intention: fields.task,
   why: "Because",

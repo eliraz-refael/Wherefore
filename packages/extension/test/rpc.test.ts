@@ -20,7 +20,8 @@ const tabs = () =>
 
 const storedItem = {
   id: "item-1",
-  type: "todo",
+  tag: "do",
+  title: "Auth PR",
   task: "Review the auth PR",
   intention: "Finish reviewing the auth PR",
   why: "Review requested",
@@ -34,17 +35,19 @@ describe("panel <-> worker RPC", () => {
     const harness = new Harness(tabs())
     return withClient(harness, (client) =>
       Effect.gen(function*() {
-        const { tabs: listed } = yield* client.call("list_tabs", {})
+        const { tabs: listed, today } = yield* client.call("list_tabs", {})
         expect(listed.map((tab) => tab.url)).toEqual([
           "https://keep.example/",
           "https://github.com/acme/api/pull/412?token=REDACTED",
           "https://slow.example/"
         ])
+        // The worker reports the user's local day with every list (core `localDay`).
+        expect(today).toMatch(/^\d{4}-\d{2}-\d{2} \((Sun|Mon|Tue|Wed|Thu|Fri|Sat)\)$/)
 
         const [item] = Schema.decodeUnknownSync(itemsKey.schema)([storedItem])
         assert(item !== undefined)
         yield* client.call("save_items", { items: [item] })
-        expect(harness.chrome.local.get("items")).toEqual({ version: 1, data: [storedItem] })
+        expect(harness.chrome.local.get("items")).toEqual({ version: 2, data: [storedItem] })
 
         const missing = yield* Effect.flip(client.call("mark_done", { id: "nope" as typeof item.id }))
         expect(missing).toMatchObject({ _tag: "ItemNotFound", id: "nope" })

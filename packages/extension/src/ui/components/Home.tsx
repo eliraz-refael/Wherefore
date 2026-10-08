@@ -4,7 +4,7 @@
  * remove it. Removals have undo.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { matchSavedTabs, type SavedItem, type TrackerType, trackerTypeLabel } from "@wherefore/core"
+import { matchSavedTabs, type SavedItem } from "@wherefore/core"
 import { DateTime } from "effect"
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
@@ -20,11 +20,9 @@ import {
   startTidy
 } from "../actions.ts"
 import { itemsAtom, openTabsAtom, runsAtom, screenAtom } from "../atoms.ts"
-import { displayDomain, isWebUrl, tabCount, whenLabel } from "../format.ts"
+import { displayDomain, isWebUrl, SECTION_ORDER, sectionLabel, sectionOf, tabCount, whenLabel } from "../format.ts"
 import { focusIdSoon, focusSoon, useAct } from "../hooks.ts"
 import { CheckIcon, GearIcon, LogoIcon, ScreenTitle, SiteBadge, StoreProblem, TabText } from "./common.tsx"
-
-export const TYPE_ORDER: ReadonlyArray<TrackerType> = ["todo", "follow_up", "read", "keep"]
 
 const newestFirst = (a: SavedItem, b: SavedItem) => DateTime.toEpochMillis(b.savedAt) - DateTime.toEpochMillis(a.savedAt)
 
@@ -153,12 +151,12 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
           </p>
         )
         : null}
-      {TYPE_ORDER.map((type) => {
-        const group = open.filter((item) => item.type === type)
+      {SECTION_ORDER.map((section) => {
+        const group = open.filter((item) => sectionOf(item.tag) === section)
         if (group.length === 0) return null
         return (
-          <section key={type} className="wf-group" aria-labelledby={`group-${type}`}>
-            <h2 id={`group-${type}`} className="wf-group-title">{trackerTypeLabel[type]}</h2>
+          <section key={section} className="wf-group" aria-labelledby={`group-${section}`}>
+            <h2 id={`group-${section}`} className="wf-group-title">{sectionLabel[section]}</h2>
             {group.map((item) => (
               <ListItem
                 key={item.id}

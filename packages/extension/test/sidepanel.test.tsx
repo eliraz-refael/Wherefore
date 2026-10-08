@@ -19,7 +19,7 @@ import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
 import { brokerClient, fakeAgentBroker, FakeNativeHost } from "./fakes/native.ts"
 import { FakeRelayHub } from "./fakes/page.ts"
-import { envelope, ISO_NOW, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
+import { envelope, ISO_NOW, itemsEnvelope, Panels, SETTINGS, storedItem } from "./fakes/panel.tsx"
 
 const panels: Array<Panels> = []
 const make = (chrome: FakeChrome, ...rest: ConstructorParameters<typeof Panels> extends [unknown, ...infer R] ? R : never) => {
@@ -92,11 +92,11 @@ const listChrome = () =>
     ],
     local: {
       settings: SETTINGS,
-      items: envelope([
+      items: itemsEnvelope([
         storedItem({ id: "a", task: "Finish the auth PR", tabs: [{ title: "Auth PR #412", url: "https://github.com/acme/api/pull/412" }] }),
-        storedItem({ id: "b", task: "Watch the Vite release", type: "follow_up", tabs: [{ title: "Vite", url: "https://vite.dev/" }] }),
-        storedItem({ id: "c", task: "Read the Effect guide", type: "read", tabs: [{ title: "Effect", url: "https://effect.website/" }] }),
-        storedItem({ id: "d", task: "Chrome API reference", type: "keep", tabs: [{ title: "tabs API", url: "https://developer.chrome.com/docs/extensions/reference/api/tabs" }] }),
+        storedItem({ id: "b", task: "Watch the Vite release", tag: "track", tabs: [{ title: "Vite", url: "https://vite.dev/" }] }),
+        storedItem({ id: "c", task: "Read the Effect guide", tag: "read", tabs: [{ title: "Effect", url: "https://effect.website/" }] }),
+        storedItem({ id: "d", task: "Chrome API reference", tag: "keep", tabs: [{ title: "tabs API", url: "https://developer.chrome.com/docs/extensions/reference/api/tabs" }] }),
         storedItem({ id: "e", task: "Pick a desk", tabs: [{ title: "Desk", url: "https://shop.example/desk" }] }),
         storedItem({ id: "f", task: "Book the dentist", status: "done", tabs: [{ title: "Dentist", url: "https://dentist.example/" }] })
       ])
@@ -179,7 +179,7 @@ describe("Your list", () => {
       tabs: [{ id: 1, windowId: 1, url: "https://shop.example/desk-a", title: "Desk A" }],
       local: {
         settings: SETTINGS,
-        items: envelope([
+        items: itemsEnvelope([
           storedItem({
             id: "a",
             task: "Compare desks",
@@ -250,7 +250,7 @@ describe("Your list", () => {
     new FakeChrome({
       local: {
         settings: SETTINGS,
-        items: envelope([
+        items: itemsEnvelope([
           storedItem({ id: "a", task: "Compare desks", tabs }),
           storedItem({ id: "b", task: "Pick a chair", tabs: [{ title: "Chair", url: "https://shop.example/chair" }] })
         ])
@@ -258,7 +258,7 @@ describe("Your list", () => {
     })
   const changeBehindThePanel = (chrome: FakeChrome, tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>) => {
     const [item, ...rest] = storedData(chrome, "items")
-    chrome.local.set("items", envelope([{ ...item, tabs: storedItem({ id: "a", task: "x", tabs }).tabs }, ...rest]))
+    chrome.local.set("items", itemsEnvelope([{ ...item, tabs: storedItem({ id: "a", task: "x", tabs }).tabs }, ...rest]))
   }
 
   it("× follows the worker: when it took the item's last tab, focus moves on as if the item left", async () => {
@@ -379,7 +379,11 @@ const reviewChrome = () => {
     ],
     steps: [],
     intentions: [
-      intention("run-1:0", "Review the auth PR", "work", [10, 11], { nextStep: "Finish reviewing the auth PR" }),
+      intention("run-1:0", "Review the auth PR", "work", [10, 11], {
+        nextStep: "Finish reviewing the auth PR",
+        shortTitle: "Auth PR #7",
+        due: { date: "2026-10-12", kind: "due", source: "Review due Sunday" }
+      }),
       intention("run-1:1", "Follow the Vite 8 release", "track", [12], { nextStep: "Watch for the Vite 8 release" }),
       intention("run-1:2", "Learn Effect", "read", [13], { confidence: "low" }),
       intention("run-1:3", "Lamp order", "done", [14]),
@@ -404,7 +408,7 @@ const reviewChrome = () => {
     ],
     local: {
       settings: SETTINGS,
-      items: envelope([storedItem({ id: "old", task: "The old thing", tabs: [{ title: "Old thing", url: "https://tracked.example/thing" }] })]),
+      items: itemsEnvelope([storedItem({ id: "old", task: "The old thing", tabs: [{ title: "Old thing", url: "https://tracked.example/thing" }] })]),
       runIndex: envelope([{ id: "run-1", status: "succeeded" }]),
       "run:run-1": envelope(run)
     }
@@ -480,12 +484,19 @@ describe("Tidy up, results", () => {
     expect(chrome.tabsIn(2).map((tab) => tab.url)).toEqual(["chrome://newtab/"])
     expect(chrome.tabsIn(1).map((tab) => tab.id)).toEqual([16, 17])
     const items = storedData(chrome, "items")
-    expect(items.map((item: any) => [item.task, item.type, item.tabs.length])).toEqual([
-      ["The old thing", "todo", 1],
-      ["Finish reviewing the auth PR", "todo", 2],
-      ["Watch for the Vite 8 release", "follow_up", 1],
-      ["Learn Effect", "read", 1],
-      ["Docs reference", "keep", 1]
+    expect(items.map((item: any) => [item.task, item.tag, item.title, item.tabs.length])).toEqual([
+      ["The old thing", "do", "The old thing", 1],
+      ["Finish reviewing the auth PR", "do", "Auth PR #7", 2],
+      ["Watch for the Vite 8 release", "track", "Follow the Vite 8 release", 1],
+      ["Learn Effect", "read", "Learn Effect", 1],
+      ["Docs reference", "keep", "Docs reference", 1]
+    ])
+    expect(items.map((item: any) => item.due)).toEqual([
+      undefined,
+      { date: "2026-10-12", kind: "due", source: "Review due Sunday" },
+      undefined,
+      undefined,
+      undefined
     ])
     // Saved with the real URL, not the redacted one the model saw.
     expect(items[1].tabs[0]).toEqual({ title: "Auth PR", url: "https://github.com/acme/api/pull/7?token=abc", domain: "github.com" })

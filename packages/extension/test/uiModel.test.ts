@@ -5,7 +5,7 @@
 import { assert, describe, expect, it } from "@effect/vitest"
 import { Run, SavedItem, TabId, WindowId } from "@wherefore/core"
 import { DateTime, Option, Schema } from "effect"
-import { maskKey, siteBadge, weekBucket, whenLabel } from "../src/ui/format.ts"
+import { maskKey, SECTION_ORDER, sectionOf, siteBadge, tagIn, weekBucket, whenLabel } from "../src/ui/format.ts"
 import { progressText } from "../src/ui/progress.ts"
 import { buildReview, itemFor, namesOf, planOf, saveBarLabel } from "../src/ui/review.ts"
 
@@ -63,7 +63,7 @@ describe("buildReview and planOf", () => {
       remap: new Map([[TabId.make(1), TabId.make(5)], [TabId.make(5), TabId.make(7)]])
     })
     const [first] = model.results
-    expect(first?.type).toBe("todo")
+    expect(first?.tag).toBe("decide")
     expect(first?.tabs.map((tab) => [tab.id, tab.url, tab.open])).toEqual([
       [7, "https://a.example/?k=secret", true],
       [2, "https://b.example/", false]
@@ -72,8 +72,8 @@ describe("buildReview and planOf", () => {
     expect(plan.close).toEqual([7, 3]) // the closed tab 2 is not closed again; the app stays
     expect(saveBarLabel(plan)).toBe("Save 1 and close 2 tabs")
     assert(first !== undefined)
-    const item = itemFor(first, { task: "  ", type: "read" }, "id" as SavedItem["id"], DateTime.makeUnsafe(0))
-    expect(Option.map(item, (saved) => [saved.task, saved.type, saved.tabs.map((tab) => tab.url)])).toEqual(
+    const item = itemFor(first, { task: "  ", tag: "read" }, "id" as SavedItem["id"], DateTime.makeUnsafe(0))
+    expect(Option.map(item, (saved) => [saved.task, saved.tag, saved.tabs.map((tab) => tab.url)])).toEqual(
       Option.some(["Pick one", "read", ["https://a.example/?k=secret", "https://b.example/"]])
     )
   })
@@ -128,6 +128,18 @@ describe("format", () => {
     expect(weekBucket(ago(2), now)).toBe("This week")
     expect(weekBucket(ago(3), now)).toBe("Last week")
     expect(weekBucket(ago(20), now)).toBe("Earlier")
+  })
+
+  it("groups tags into the list's sections, do and decide together under To do", () => {
+    expect(SECTION_ORDER).toEqual(["todo", "follow_up", "read", "keep"])
+    expect((["do", "decide", "track", "read", "keep"] as const).map(sectionOf)).toEqual(
+      ["todo", "todo", "follow_up", "read", "keep"]
+    )
+    // Moving to another section takes that section's tag; moving back keeps the item's own.
+    expect(tagIn("read", "decide")).toBe("read")
+    expect(tagIn("todo", "decide")).toBe("decide")
+    expect(tagIn("todo", "read")).toBe("do")
+    expect(tagIn("follow_up", "keep")).toBe("track")
   })
 
   it("shows a saved key by its last four characters only", () => {

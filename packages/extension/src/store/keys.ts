@@ -1,16 +1,53 @@
 /**
  * Everything the extension keeps in `chrome.storage.local` (architecture A5).
  */
-import { AgentOptions, defaultSettings, ProfileId, Run, type RunId, RunIndexEntry, SavedItem, Settings } from "@wherefore/core"
+import {
+  AgentOptions,
+  defaultSettings,
+  type ItemTag,
+  ProfileId,
+  Run,
+  type RunId,
+  RunIndexEntry,
+  SavedItem,
+  Settings
+} from "@wherefore/core"
 import { Schema } from "effect"
 import type { StoreKey } from "./StoreKey.ts"
+
+/** Version 1 item types, and the tag each became. */
+const tagOfType: ReadonlyMap<unknown, ItemTag> = new Map([
+  ["todo", "do"],
+  ["follow_up", "track"],
+  ["read", "read"],
+  ["keep", "keep"]
+])
+
+const trimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "")
+
+/**
+ * Items, version 1 to 2: the type becomes a tag, and the title is the intention's title (else the
+ * task), trimmed. Version 1 had no due dates. Anything else is left for the schema to judge.
+ */
+const itemsV2 = (data: unknown): unknown => {
+  if (!Array.isArray(data)) throw new Error("not a list")
+  return data.map((item: unknown) => {
+    if (typeof item !== "object" || item === null) throw new Error("an item is not an object")
+    const { type, ...rest } = item as Readonly<Record<string, unknown>>
+    const tag = tagOfType.get(type)
+    if (tag === undefined) throw new Error(`unknown item type ${JSON.stringify(type)}`)
+    // A task that is only spaces stays as it was, so the title is never empty.
+    const title = [trimmed(rest["intention"]), trimmed(rest["task"])].find((text) => text !== "") ?? rest["task"]
+    return { ...rest, tag, title }
+  })
+}
 
 /** The user's list: open items and the Done archive (done items keep their tabs and `doneAt`). */
 export const itemsKey: StoreKey<ReadonlyArray<SavedItem>> = {
   name: "items",
-  version: 1,
+  version: 2,
   schema: Schema.Array(SavedItem),
-  migrations: {},
+  migrations: { 1: itemsV2 },
   empty: []
 }
 
