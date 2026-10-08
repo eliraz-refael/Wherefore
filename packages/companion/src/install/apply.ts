@@ -7,7 +7,8 @@ import { execFile } from "node:child_process"
 import * as Fs from "node:fs/promises"
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
 import { Effect, Schema } from "effect"
-import { type Location, pathFor, platformOf, stateDir } from "../paths.ts"
+import { isAlive as processIsAlive } from "../broker/registry.ts"
+import { type Location, pathFor, type Platform, stateDir } from "../paths.ts"
 import {
   browserTargets,
   claudeMcpAdd,
@@ -18,6 +19,7 @@ import {
   isCheckoutBuild,
   isVersionName,
   keptVersions,
+  launcherDir,
   launcherPath,
   manifestFileName,
   planInstall,
@@ -56,6 +58,88 @@ const attempt = <A>(what: string, run: () => Promise<A>) =>
 
 const exists = (path: string) => Effect.promise(() => Fs.stat(path).then(() => true, () => false))
 
+/** What `replaceAtomically` uses; tests replace them. */
+export interface ReplaceOptions {
+  readonly platform?: Platform
+  readonly rename?: (from: string, to: string) => Promise<void>
+  readonly sleep?: (ms: number) => Promise<void>
+}
+
+/** How often, and after which pauses, a rename Windows refused is tried again. */
+export const RENAME_BACKOFF_MS: ReadonlyArray<number> = [50, 100, 150, 200]
+
+/** Windows refuses a rename while another process (an antivirus scan, the indexer) has the file open. */
+const isTransientRenameError = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES"
+}
+
+/**
+ * Writes `to` through a temporary file next to it (`write` fills it), `<to>.<pid>.tmp`, then renames
+ * it into place, so a reader sees the old file or the new one, never half of one. On Windows a
+ * refused rename is tried again a few times (`RENAME_BACKOFF_MS`) before it fails.
+ */
+export const replaceAtomically = async (to: string, write: (temp: string) => Promise<void>, options: ReplaceOptions = {}) => {
+  const platform = options.platform ?? (process.platform === "win32" ? "win32" : "linux")
+  const rename = options.rename ?? Fs.rename
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  const temp = `${to}.${process.pid}.tmp`
+  try {
+    await write(temp)
+    for (let attempt = 0;; attempt++) {
+      try {
+        await rename(temp, to)
+        break
+      } catch (error) {
+        const pause = RENAME_BACKOFF_MS[attempt]
+        if (platform !== "win32" || pause === undefined || !isTransientRenameError(error)) throw error
+        await sleep(pause)
+      }
+    }
+  } catch (error) {
+    await Fs.rm(temp, { force: true })
+    throw error
+  }
+}
+
+/** The pid in a temporary file's name, `<name>.<pid>.tmp` (`replaceAtomically`'s). */
+const pidOfTempFile = (name: string): number | undefined => {
+  const match = /^.+\.(\d+)\.tmp$/.exec(name)
+  return match?.[1] === undefined ? undefined : Number(match[1])
+}
+
+/**
+ * Removes the temporary files a killed `install` left in `dirs` (`<name>.<pid>.tmp`, whose pid is
+ * gone), so an emptied directory can go. Anything else, and a running install's, stays.
+ */
+export const removeStaleTemps = (platform: Platform, dirs: ReadonlyArray<string>, isAlive: (pid: number) => boolean) =>
+  Effect.gen(function*() {
+    const path = pathFor(platform)
+    const removed: Array<string> = []
+    for (const dir of dirs) {
+      const names = yield* Effect.promise(() => Fs.readdir(dir).catch(() => [] as Array<string>))
+      for (const name of names) {
+        const pid = pidOfTempFile(name)
+        if (pid === undefined || pid === process.pid || isAlive(pid)) continue
+        const file = path.join(dir, name)
+        if (yield* Effect.promise(() => Fs.rm(file, { force: true }).then(() => true, () => false))) removed.push(file)
+      }
+    }
+    return removed
+  })
+
+/** Where `install` writes temporary files: the state directory, bin/, and each copy's directory. */
+const tempDirs = (location: Location) =>
+  Effect.map(
+    versionsIn(copiesDir(location)),
+    (versions) => [
+      stateDir(location),
+      launcherDir(location),
+      copiesDir(location),
+      ...versions.map((version) => pathFor(location.platform).join(copiesDir(location), version))
+    ]
+  )
+
 export interface Registered {
   readonly browser: string
   readonly where?: string
@@ -72,18 +156,14 @@ export const applyInstall = (location: Location, plan: InstallPlan, run: RunComm
     }
     for (const file of plan.files) {
       // Atomically (a temporary file, then a rename): Chrome may start the wrapper, and Claude Code
-      // the launcher, while `install` rewrites them; a shell reading one mid-write would run half.
-      yield* attempt(`cannot write ${file.path}`, async () => {
-        const temp = `${file.path}.${process.pid}.tmp`
-        try {
+      // the launcher, while `install` rewrites them. A POSIX shell running the old file keeps
+      // reading that file, so it never runs half of each. On Windows cmd re-reads a batch file as
+      // it runs it, so rewriting a .bat/.cmd that is running at that moment can still misbehave.
+      yield* attempt(`cannot write ${file.path}`, () =>
+        replaceAtomically(file.path, async (temp) => {
           await Fs.writeFile(temp, file.content, { mode: file.mode })
           if (posix) await Fs.chmod(temp, file.mode)
-          await Fs.rename(temp, file.path)
-        } catch (error) {
-          await Fs.rm(temp, { force: true })
-          throw error
-        }
-      })
+        }, { platform: location.platform }))
     }
     const failedBrowsers = new Map<string, string>()
     for (const command of plan.commands) {
@@ -129,15 +209,10 @@ export const copyCli = (platform: Location["platform"], from: string, to: string
     const dir = path.dirname(to)
     await Fs.mkdir(dir, { recursive: true, mode: 0o700 })
     await Fs.writeFile(path.join(dir, "package.json"), `${JSON.stringify({ type: "module" })}\n`, { mode: 0o644 })
-    const temp = `${to}.${process.pid}.tmp`
-    try {
+    await replaceAtomically(to, async (temp) => {
       await Fs.copyFile(from, temp)
       if (platform !== "win32") await Fs.chmod(temp, 0o755)
-      await Fs.rename(temp, to)
-    } catch (error) {
-      await Fs.rm(temp, { force: true })
-      throw error
-    }
+    }, { platform })
   })
 
 /**
@@ -174,6 +249,8 @@ export interface InstallInput {
   readonly liveVersions: ReadonlyArray<string>
   readonly exists: (path: string) => boolean
   readonly run: RunCommand
+  /** Whether a process exists (for stale temporary files); the real process table by default. */
+  readonly isAlive?: (pid: number) => boolean
 }
 
 export interface InstallReport {
@@ -208,6 +285,7 @@ export const installCompanion = (location: Location, input: InstallInput) =>
     // starts the wrapper or launcher in: bake the state directory this install uses.
     const home = input.env["WHEREFORE_HOME"]
     const env = home !== undefined && home !== "" ? { ...input.env, WHEREFORE_HOME: stateDir(location) } : input.env
+    yield* removeStaleTemps(location.platform, yield* tempDirs(location), input.isAlive ?? processIsAlive)
     const previous = (yield* installedWrapper(location))?.cli
     const hadLauncher = yield* exists(launcherPath(location))
     const checkout = isCheckoutBuild(location.platform, input.running, input.exists)
@@ -232,9 +310,11 @@ export const installCompanion = (location: Location, input: InstallInput) =>
     } satisfies InstallReport
   })
 
-export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
+export const applyUninstall = (plan: UninstallPlan, run: RunCommand, isAlive: (pid: number) => boolean = processIsAlive) =>
   Effect.gen(function*() {
     const removed: Array<string> = []
+    // A killed install's temporary files would keep bin/ from going.
+    yield* removeStaleTemps(plan.platform, plan.tempDirs, isAlive)
     for (const file of plan.files) {
       if (!(yield* exists(file))) continue
       yield* attempt(`cannot remove ${file}`, () => Fs.rm(file, { force: true }))
@@ -244,7 +324,7 @@ export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
       if (!(yield* exists(dir))) continue
       // Only the version directories `install` made, then the directory if that empties it:
       // anything else someone put there stays.
-      const copies = yield* removeCopies(platformOf(process.platform), dir, new Set())
+      const copies = yield* removeCopies(plan.platform, dir, new Set())
       if (copies.failed.length > 0) {
         return yield* new InstallError({ message: `cannot remove ${copies.failed.join(", ")}` })
       }

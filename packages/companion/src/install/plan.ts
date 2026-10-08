@@ -416,12 +416,15 @@ export const planInstall = (
 }
 
 export interface UninstallPlan {
+  readonly platform: Platform
   /** Files to remove if present. */
   readonly files: ReadonlyArray<string>
   /** Copies directories: their version directories go, then the directory itself if that empties it. */
   readonly dirs: ReadonlyArray<string>
   /** Directories to remove once the files are gone, only if empty: the launcher's. */
   readonly emptyDirs: ReadonlyArray<string>
+  /** Where a killed install may have left temporary files (`<name>.<pid>.tmp`). */
+  readonly tempDirs: ReadonlyArray<string>
   readonly commands: ReadonlyArray<Command & { readonly browser: string }>
 }
 
@@ -435,7 +438,14 @@ export const planUninstall = (location: Location): UninstallPlan => {
     if (target.registryKey !== undefined) commands.push({ ...registryDelete(target.registryKey), browser: target.browser })
     if (target.manifestDir !== undefined) files.push(path.join(target.manifestDir, manifestFileName))
   }
-  return { files, dirs: [copiesDir(location)], emptyDirs: [launcherDir(location)], commands }
+  return {
+    platform,
+    files,
+    dirs: [copiesDir(location)],
+    emptyDirs: [launcherDir(location)],
+    tempDirs: [stateDir(location), launcherDir(location)],
+    commands
+  }
 }
 
 /** Quotes an argument for the user's shell when it needs it (POSIX shells, or cmd/PowerShell). */

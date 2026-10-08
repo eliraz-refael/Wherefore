@@ -300,7 +300,9 @@ After the first release:
 
 1. On npmjs.com → `@eliraz-refael/wherefore` → Settings → Trusted Publisher → GitHub Actions:
    organization or user `eliraz-refael`, repository `Wherefore`, workflow filename
-   `release-companion.yml`, no environment (the workflow uses none). Save.
+   `release-companion.yml`, no environment (the workflow uses none). Save. npm checks the workflow
+   file, not the job: the publish runs in its `release` job, and renaming jobs changes nothing
+   (only an environment, if one were added, would have to be entered here too).
 2. Delete the `NPM_TOKEN` secret, and the token on npmjs.com. Optionally, in the package's
    Settings → Publishing access, require two-factor authentication and disallow tokens.
 

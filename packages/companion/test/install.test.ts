@@ -13,6 +13,7 @@ import {
   installedHosts,
   installedLauncher,
   installedWrapper,
+  replaceAtomically,
   type RunCommand
 } from "../src/install/apply.ts"
 import {
@@ -557,5 +558,112 @@ describe("install copies the CLI to a stable place", () => {
       expect(existsSync(copiesDir(home))).toBe(false)
       expect(yield* runWrapper(home)).toBe(ran(running, ["native-host", "chrome-extension://x/"]))
       expect(yield* runScript(launcherPath(home), ["mcp"])).toBe(ran(running, ["mcp"]))
+    }))
+})
+
+describe("install's file writes and clean-up", () => {
+  const record: RunCommand = () => Effect.succeed({ ok: true, output: "" })
+  const errno = (code: string) => Object.assign(new Error(`${code}: rename refused`), { code })
+
+  it.live("tries a rename Windows refused again, with a short backoff, then gives up as before", () =>
+    Effect.gen(function*() {
+      const { home } = yield* tempLocation
+      const to = NodePath.join(home, "wherefore.cmd")
+      const write = (temp: string) => Fs.writeFile(temp, "new")
+      const pauses: Array<number> = []
+      const sleep = async (ms: number) => {
+        pauses.push(ms)
+      }
+
+      // Refused twice (an antivirus scan has the file open), then allowed.
+      let refusals = 2
+      const flaky = (from: string, target: string) => (refusals-- > 0 ? Promise.reject(errno("EBUSY")) : Fs.rename(from, target))
+      yield* Effect.promise(() => replaceAtomically(to, write, { platform: "win32", rename: flaky, sleep }))
+      expect(yield* Effect.promise(() => Fs.readFile(to, "utf8"))).toBe("new")
+      expect(pauses).toEqual([50, 100])
+
+      // Refused every time: five tries, then the error, and no temporary file left.
+      pauses.length = 0
+      let tries = 0
+      const never = () => {
+        tries++
+        return Promise.reject(errno("EPERM"))
+      }
+      const failed = yield* Effect.promise(() => replaceAtomically(to, write, { platform: "win32", rename: never, sleep }).then(() => undefined, (error: unknown) => error))
+      expect(failed).toMatchObject({ code: "EPERM" })
+      expect(tries).toBe(5)
+      expect(pauses).toEqual([50, 100, 150, 200])
+      expect((yield* Effect.promise(() => Fs.readdir(home))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+
+      // Elsewhere a refused rename is a real error: no retry.
+      pauses.length = 0
+      tries = 0
+      const posix = yield* Effect.promise(() => replaceAtomically(to, write, { platform: "linux", rename: never, sleep }).then(() => undefined, (error: unknown) => error))
+      expect(posix).toMatchObject({ code: "EPERM" })
+      expect([tries, pauses.length]).toEqual([1, 0])
+    }))
+
+  it.live("removes the temporary files a killed install left, so uninstall can remove bin/", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux", env: {} }
+      const running = NodePath.join(location.home, "npx", "dist", "cli.js")
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.dirname(running), { recursive: true })
+        await Fs.writeFile(running, "console.log('ran')\n")
+      })
+      const DEAD = 999_999
+      const LIVE = 424_242
+      const isAlive = (pid: number) => pid === LIVE
+      const install = installCompanion(home, {
+        running,
+        version: "0.1.0",
+        node: process.execPath,
+        env: {},
+        liveVersions: [],
+        exists: (path) => path.startsWith(location.home) && existsSync(path),
+        run: record,
+        isAlive
+      })
+      yield* install
+      const copyDir = NodePath.dirname(copyPath(home, "0.1.0"))
+      const leftovers = [
+        NodePath.join(stateDir(home), `native-host.sh.${DEAD}.tmp`),
+        NodePath.join(launcherDir(home), `wherefore.${DEAD}.tmp`),
+        NodePath.join(copyDir, `cli.js.${DEAD}.tmp`)
+      ]
+      // Not ours to remove: another install still running, and a file that isn't one of ours.
+      const kept = [NodePath.join(stateDir(home), `native-host.sh.${LIVE}.tmp`), NodePath.join(stateDir(home), "notes.tmp")]
+      yield* Effect.promise(() => Promise.all([...leftovers, ...kept].map((file) => Fs.writeFile(file, ""))))
+
+      yield* install
+      expect(leftovers.filter((file) => existsSync(file))).toEqual([])
+      expect(kept.filter((file) => existsSync(file))).toEqual(kept)
+
+      // Killed again before uninstall: bin/ still goes, being empty but for that.
+      yield* Effect.promise(() => Fs.writeFile(NodePath.join(launcherDir(home), `wherefore.${DEAD}.tmp`), ""))
+      const removed = yield* applyUninstall(planUninstall(home), record, isAlive)
+      expect(removed).toContain(launcherDir(home))
+      expect(existsSync(launcherDir(home))).toBe(false)
+    }))
+
+  it.live("uninstalls with the plan's platform: a Windows plan joins Windows paths", () =>
+    Effect.gen(function*() {
+      if (process.platform === "win32") return
+      const location = yield* tempLocation
+      const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux", env: {} }
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(NodePath.join(copiesDir(home), "0.1.0"), { recursive: true })
+        await Fs.writeFile(NodePath.join(copiesDir(home), "keep"), "")
+      })
+      const plan = planUninstall(home)
+      const posix = yield* applyUninstall({ ...plan, files: [], emptyDirs: [], tempDirs: [], commands: [] }, record)
+      expect(posix).toEqual([NodePath.posix.join(copiesDir(home), "0.1.0")])
+      yield* Effect.promise(() => Fs.mkdir(NodePath.join(copiesDir(home), "0.1.0")))
+      // The same plan marked win32 (as `planUninstall` makes on Windows) names its copies with `\\`,
+      // whatever this machine is.
+      const windows = yield* applyUninstall({ ...plan, platform: "win32", files: [], emptyDirs: [], tempDirs: [], commands: [] }, record)
+      expect(windows).toEqual([NodePath.win32.join(copiesDir(home), "0.1.0")])
     }))
 })

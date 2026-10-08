@@ -30,36 +30,33 @@ concurrency:
   group: release-companion-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
 jobs:
-  release:
-    name: Release the companion
+  # Checks, builds and packs with read-only permissions: `pnpm install` runs dependencies' scripts
+  # here, so this job holds no OIDC token (which npm's trusted publishing would accept) and no write
+  # access. The publish job below runs none of the repository's dependencies.
+  build:
+    name: Build and pack the companion
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write # the GitHub Release
-      id-token: write # npm trusted publishing (OIDC) and provenance
-    env:
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      tgz: ${{ steps.pack.outputs.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Not left in .git/config: `pnpm install` runs dependencies' scripts in this job, which
-          # holds contents: write. The release step passes the token to gh itself.
-          persist-credentials: false
+          persist-credentials: false # nothing here pushes; keep the token out of .git/config
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          # No registry-url: it would write an .npmrc with `_authToken=${NODE_AUTH_TOKEN}` for every
-          # npm command in the job. The publish step writes one only when it uses NPM_TOKEN.
-
-      # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
-      - name: Upgrade npm
-        run: |
-          npm install -g npm@11.20.0
-          npm --version
 
       - name: Check the version
         id: version
@@ -100,6 +97,7 @@ jobs:
           pnpm -C packages/companion pack --pack-destination "$RUNNER_TEMP/pack"
           tgz=$(ls "$RUNNER_TEMP"/pack/*.tgz)
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$tgz")" >> "$GITHUB_OUTPUT"
           echo "Tarball: $tgz ($(du -h "$tgz" | cut -f1))"
           tar -tzf "$tgz" | sort > "$RUNNER_TEMP/files.txt"
           printf '%s\n' package/LICENSE package/README.md package/dist/cli.js package/package.json > "$RUNNER_TEMP/expected.txt"
@@ -127,21 +125,57 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: companion-tarball
+          path: ${{ steps.pack.outputs.tgz }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Release the companion
+    needs: build
+    if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the GitHub Release
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    env:
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: companion-tarball
+          path: ${{ runner.temp }}/pack
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          # No registry-url: it would write an .npmrc with `_authToken=${NODE_AUTH_TOKEN}` for every
+          # npm command in the job. The publish step writes one only when it uses NPM_TOKEN.
+
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
+      - name: Upgrade npm
+        run: |
+          npm install -g npm@11.20.0
+          npm --version
+
       - name: Create the GitHub Release
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TGZ: ${{ steps.pack.outputs.tgz }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          TGZ: ${{ runner.temp }}/pack/${{ needs.build.outputs.tgz }}
         run: |
-          # Idempotent, so a rerun after a failed publish only replaces the tarball. Once npm has
-          # this version, the release keeps the tarball it has: the one npm published.
+          # Safe to rerun (e.g. after a failed publish): a release that has a tarball keeps it, since
+          # people may have installed from its URL; one without gets this one.
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            if npm view "@eliraz-refael/wherefore@$VERSION" version > /dev/null 2>&1; then
-              echo "@eliraz-refael/wherefore@$VERSION is on npm already; leaving the release's tarball as it is."
+            tarballs=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '[.assets[] | select(.name | endswith(".tgz"))] | length')
+            if [ "$tarballs" -gt 0 ]; then
+              echo "Release $GITHUB_REF_NAME has a tarball already; it is never replaced."
             else
-              gh release upload "$GITHUB_REF_NAME" "$TGZ" --clobber
+              gh release upload "$GITHUB_REF_NAME" "$TGZ"
             fi
           else
             flags=""
@@ -157,9 +191,7 @@ jobs:
         if: env.DRY_RUN != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          TGZ: ${{ steps.pack.outputs.tgz }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          TGZ: ${{ runner.temp }}/pack/${{ needs.build.outputs.tgz }}
         run: |
           if npm view "@eliraz-refael/wherefore@$VERSION" version > /dev/null 2>&1; then
             echo "@eliraz-refael/wherefore@$VERSION is already on npm; nothing to publish."
