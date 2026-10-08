@@ -1,11 +1,12 @@
 /**
- * The side panel's pure parts: the review model and save plan, the progress line, and display
- * helpers.
+ * The side panel's pure parts: the review model and save plan, the progress line, Your list's
+ * sections and search, and display helpers.
  */
 import { assert, describe, expect, it } from "@effect/vitest"
 import { Run, SavedItem, TabId, WindowId } from "@wherefore/core"
 import { DateTime, Option, Schema } from "effect"
 import { maskKey, SECTION_ORDER, sectionOf, siteBadge, tagIn, weekBucket, whenLabel } from "../src/ui/format.ts"
+import { listSections, matchesSearch, metaLine, openItems, searchWords, tagCounts } from "../src/ui/list.ts"
 import { progressText } from "../src/ui/progress.ts"
 import { buildReview, itemFor, namesOf, planOf, saveBarLabel } from "../src/ui/review.ts"
 
@@ -151,5 +152,78 @@ describe("format", () => {
     expect(siteBadge("github.com")).toEqual(siteBadge("github.com"))
     expect(siteBadge("github.com").letter).toBe("G")
     expect(siteBadge("chrome://settings").letter).toBe("S")
+  })
+})
+
+describe("Your list: sections, search and filter", () => {
+  const item = (id: string, fields: Record<string, unknown> = {}): SavedItem =>
+    Schema.decodeUnknownSync(SavedItem)({
+      id,
+      tag: "do",
+      title: `Title ${id}`,
+      task: `Task ${id}`,
+      intention: `Intention ${id}`,
+      why: "",
+      tabs: [{ title: `Tab ${id}`, url: `https://${id}.example/`, domain: `${id}.example` }],
+      status: "open",
+      savedAt: "2026-10-05T09:00:00.000Z",
+      ...fields
+    })
+  const due = (date: string) => ({ due: { date, kind: "due", source: "" } })
+  const ids = (items: ReadonlyArray<SavedItem>) => items.map((saved) => saved.id)
+
+  it("puts dated items under Coming up, soonest first, and the rest under Anytime by tag, keeping ties in order", () => {
+    const items = openItems([
+      item("keep", { tag: "keep" }),
+      item("later", { tag: "read", ...due("2026-11-02") }),
+      item("read", { tag: "read" }),
+      item("overdue", { tag: "keep", ...due("2026-09-30") }),
+      item("do1"),
+      item("soon", due("2026-10-09")),
+      item("track", { tag: "track" }),
+      item("do2"),
+      item("decide", { tag: "decide" }),
+      item("done", { status: "done", doneAt: "2026-10-06T09:00:00.000Z" })
+    ])
+    const { comingUp, anytime } = listSections(items, { filter: "all", query: "", keep: null })
+    expect(ids(comingUp)).toEqual(["overdue", "soon", "later"])
+    expect(ids(anytime)).toEqual(["do1", "do2", "track", "decide", "read", "keep"])
+    expect(tagCounts(items)).toEqual({ do: 3, track: 1, decide: 1, read: 2, keep: 2 })
+  })
+
+  it("lists the newest first", () => {
+    const older = item("older", { savedAt: "2026-10-01T09:00:00.000Z" })
+    const newer = item("newer", { savedAt: "2026-10-04T09:00:00.000Z" })
+    expect(ids(openItems([older, newer]))).toEqual(["newer", "older"])
+  })
+
+  it("search: every word, any case, in the title, task, why, tab titles or sites", () => {
+    const desk = item("desk", {
+      title: "Desk",
+      task: "Pick a standing desk",
+      why: "Back pain",
+      tabs: [{ title: "Oak top", url: "https://shop.example/oak", domain: "" }]
+    })
+    expect(searchWords("  Oak   BACK ")).toEqual(["oak", "back"])
+    expect(matchesSearch(desk, searchWords(""))).toBe(true)
+    expect(matchesSearch(desk, searchWords("standing pain"))).toBe(true)
+    // A tab with no saved domain is matched by its URL's.
+    expect(matchesSearch(desk, searchWords("SHOP.example oak"))).toBe(true)
+    expect(matchesSearch(desk, searchWords("desk github"))).toBe(false)
+    expect(ids(listSections([desk, item("x")], { filter: "all", query: "oak", keep: null }).anytime)).toEqual(["desk"])
+    expect(ids(listSections([desk, item("x", { tag: "read" })], { filter: "read", query: "", keep: null }).anytime)).toEqual(["x"])
+  })
+
+  it("keeps the item being edited, whatever the search and filter say", () => {
+    const items = [item("edited", { tag: "do" }), item("other", { tag: "read" })]
+    expect(ids(listSections(items, { filter: "read", query: "nothing", keep: "edited" }).anytime)).toEqual(["edited"])
+    expect(ids(listSections(items, { filter: "read", query: "", keep: "edited" }).anytime)).toEqual(["edited", "other"])
+    expect(ids(listSections(items, { filter: "read", query: "", keep: null }).anytime)).toEqual(["other"])
+  })
+
+  it("says how many tabs and which sites, at most two", () => {
+    const tabs = ["a", "b", "a", "c"].map((site, i) => ({ title: `${i}`, url: `https://${site}.example/${i}`, domain: `${site}.example` }))
+    expect(metaLine(item("m", { tabs }))).toBe("4 tabs · a.example, b.example")
+    expect(metaLine(item("one"))).toBe("1 tab · one.example")
   })
 })

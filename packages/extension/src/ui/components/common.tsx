@@ -5,6 +5,7 @@
  * Everything that came from the web (titles, URLs, page-derived text) is rendered as React text,
  * never as HTML.
  */
+import { type ItemTag, tagLabel } from "@wherefore/core"
 import type { ReactNode } from "react"
 import { siteBadge } from "../format.ts"
 
@@ -54,6 +55,25 @@ export const ChevronIcon = ({ open }: { readonly open: boolean }) => (
   >
     <path d="m9 6 6 6-6 6" />
   </svg>
+)
+
+export const CalendarIcon = ({ size = 16 }: { readonly size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...stroke} strokeWidth="2.2" aria-hidden="true" className="wf-calendar">
+    <rect x="3" y="5" width="18" height="16" rx="2" />
+    <path d="M16 3v4M8 3v4M3 10h18" />
+  </svg>
+)
+
+export const SearchIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" {...stroke} strokeWidth="2" aria-hidden="true" className="wf-search-icon">
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-3.5-3.5" />
+  </svg>
+)
+
+/** What kind of thing an item is ("Do", "Track", …): a tinted chip, the same width for every tag. */
+export const TagChip = ({ tag, id }: { readonly tag: ItemTag; readonly id?: string }) => (
+  <span id={id} className={`wf-tag wf-tag-${tag}`}>{tagLabel[tag]}</span>
 )
 
 /** A screen's title. Focused when the screen opens, so keyboard and screen reader users land on it. */

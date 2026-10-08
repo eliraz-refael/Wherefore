@@ -1,13 +1,14 @@
 /**
  * React glue: run panel Effects with the registry's services, show their outcome in the toast,
- * and move focus after an in-place update.
+ * move focus after an in-place update, and render again when the day changes.
  */
 import { RegistryContext, useAtomSet } from "@effect/atom-react"
 import { Cause, Effect, Exit, Option } from "effect"
-import { useCallback, useContext } from "react"
+import { useCallback, useContext, useEffect, useState } from "react"
 import { Atom, AtomRegistry } from "../unstable.ts"
 import { describeError, type Done, type PanelEffect } from "./actions.ts"
 import { panelRuntime, toastAtom } from "./atoms.ts"
+import { localToday } from "./dates.ts"
 
 /** Runs an Effect on this registry's panel services (built once, kept for the registry's life). */
 export const useRun = () => {
@@ -83,4 +84,43 @@ const focusWhenThere = (find: () => HTMLElement | null): void => {
     else if (tries++ < 10) setTimeout(attempt, 16)
   }
   setTimeout(attempt, 0)
+}
+
+/** The user's calendar day at `ms`, as a key. */
+const dayKey = (ms: number): string => {
+  const { year, month, day } = localToday(ms)
+  return `${year}-${month}-${day}`
+}
+
+/**
+ * Renders again when the local day changes, so what a screen says about today moves on with the
+ * calendar: at the next local midnight (one timer, set again each time), and when the panel is
+ * shown again or gets focus (a computer that slept through midnight fires the timer late). Read
+ * the time with `Date.now()` while rendering. A check on the same day just sets the timer again,
+ * from now.
+ */
+export const useNewDay = (): void => {
+  const [day, setDay] = useState(() => dayKey(Date.now()))
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => {
+      clearTimeout(timer)
+      const midnight = new Date()
+      midnight.setHours(24, 0, 0, 0)
+      timer = setTimeout(check, midnight.getTime() - Date.now())
+    }
+    // A new day renders again, and this effect then sets the timer for the next one.
+    const check = () => (dayKey(Date.now()) === day ? schedule() : setDay(dayKey(Date.now())))
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check()
+    }
+    schedule()
+    document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener("focus", check)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener("focus", check)
+    }
+  }, [day])
 }

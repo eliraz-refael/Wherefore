@@ -107,10 +107,16 @@ export interface SavableIntention {
   readonly kind: IntentionKind
 }
 
+/** The title an intention is listed by: the model's `short_title`, else the intention's title. */
+export const savedTitle = (intention: { readonly title: string; readonly shortTitle?: string }): string => {
+  const shortTitle = intention.shortTitle?.trim() ?? ""
+  return shortTitle !== "" ? shortTitle : intention.title
+}
+
 /**
  * A new, open saved item for an intention; `None` for kinds that aren't saved (done, dead, app).
- * The task is the model's `next_step`, and the title its `short_title`; both fall back to the
- * intention's title.
+ * The task is the model's `next_step`, falling back to the intention's title; the title is
+ * `savedTitle`.
  */
 export const newSavedItem = (input: {
   readonly id: SavedItemId
@@ -122,11 +128,10 @@ export const newSavedItem = (input: {
   if (disposition._tag !== "Save") return Option.none()
   const { intention } = input
   const nextStep = intention.nextStep?.trim() ?? ""
-  const shortTitle = intention.shortTitle?.trim() ?? ""
   return Option.some({
     id: input.id,
     tag: disposition.tag,
-    title: shortTitle !== "" ? shortTitle : intention.title,
+    title: savedTitle(intention),
     task: nextStep !== "" ? nextStep : intention.title,
     intention: intention.title,
     why: intention.why,

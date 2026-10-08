@@ -76,11 +76,22 @@ export const itemsEnvelope = (data: unknown) => ({ version: itemsKey.version, da
 
 export const ISO_NOW = () => new Date().toISOString()
 
+/**
+ * When a fixture item was saved, unless the test says: one instant for all of them, so items built
+ * together tie and the list keeps their stored order. (Stamping each with the clock let the list's
+ * newest-first order flip whenever a millisecond passed between building two of them.)
+ */
+const SAVED_AT = ISO_NOW()
+
 /** A saved item in its stored (JSON) form. */
 export const storedItem = (fields: {
   readonly id: string
   readonly task: string
+  /** The short title; the task when not given. */
+  readonly title?: string
+  readonly why?: string
   readonly tag?: "do" | "track" | "decide" | "read" | "keep"
+  readonly due?: { readonly date: string; readonly kind: "due" | "event" | "renews" | "expires" | "starts"; readonly source: string }
   readonly tabs: ReadonlyArray<{ readonly title: string; readonly url: string }>
   readonly status?: "open" | "done"
   readonly savedAt?: string
@@ -88,13 +99,14 @@ export const storedItem = (fields: {
 }) => ({
   id: fields.id,
   tag: fields.tag ?? "do",
-  title: fields.task,
+  title: fields.title ?? fields.task,
   task: fields.task,
   intention: fields.task,
-  why: "Because",
+  why: fields.why ?? "Because",
+  ...(fields.due === undefined ? {} : { due: fields.due }),
   tabs: fields.tabs.map((tab) => ({ ...tab, domain: new URL(tab.url).hostname.replace(/^www\./, "") })),
   status: fields.status ?? "open",
-  savedAt: fields.savedAt ?? ISO_NOW(),
+  savedAt: fields.savedAt ?? SAVED_AT,
   ...(fields.status === "done" ? { doneAt: fields.doneAt ?? ISO_NOW() } : {})
 })
 

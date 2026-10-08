@@ -27,6 +27,26 @@
   --wf-color-warning: #9a5b00;
   --wf-color-toast: #151414;
 
+  /* Tag chips on Your list and the Tidy up results. */
+  --wf-tag-do-bg: #eaefff;
+  --wf-tag-do-fg: #1c3fe5;
+  --wf-tag-track-bg: #e2f5ec;
+  --wf-tag-track-fg: #0d6b47;
+  --wf-tag-decide-bg: #fde8ef;
+  --wf-tag-decide-fg: #a1214f;
+  --wf-tag-read-bg: #f0eaff;
+  --wf-tag-read-fg: #5a3cc0;
+  --wf-tag-keep-bg: #f0efef;
+  --wf-tag-keep-fg: #525150;
+
+  /* Dates: the pill on a row and the box in an expanded item; warm when soon or past. */
+  --wf-date-bg: #f0efef;
+  --wf-date-fg: #383838;
+  --wf-datebox-bg: #f8f6f6;
+  --wf-date-soon-bg: #fff1d6;
+  --wf-date-soon-fg: #8a4b00;
+  --wf-datebox-soon-bg: #fff7e8;
+
   --wf-radius-xs: 4px;
   --wf-radius-sm: 6px;
   --wf-radius-md: 8px;
@@ -244,8 +264,7 @@ p {
 }
 
 .wf-icon-button:hover,
-.wf-text-button:hover,
-.wf-done-button:hover {
+.wf-text-button:hover {
   background: var(--wf-color-track);
 }
 
@@ -518,21 +537,6 @@ p {
   display: block;
 }
 
-.wf-done-button {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--wf-space-1);
-  height: 36px;
-  padding: 0 10px;
-  border-radius: var(--wf-radius-md);
-  border: 0;
-  background: transparent;
-  color: var(--wf-color-fg-muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .wf-item-details {
   padding: 0 14px var(--wf-space-3);
   display: flex;
@@ -558,6 +562,306 @@ p {
   display: flex;
   flex-direction: column;
   gap: var(--wf-space-2);
+}
+
+/* ---------- your list: search, chips, rows ---------- */
+
+.wf-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.wf-search-icon {
+  position: absolute;
+  left: var(--wf-space-3);
+  color: var(--wf-color-fg-subtle);
+  pointer-events: none;
+}
+
+.wf-search-input {
+  width: 100%;
+  padding: 0 var(--wf-space-3) 0 36px;
+  border-radius: var(--wf-radius-md);
+}
+
+.wf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -6px;
+}
+
+.wf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 var(--wf-space-3);
+  border: 0;
+  border-radius: var(--wf-radius-full);
+  background: var(--wf-color-surface);
+  box-shadow: inset 0 0 0 1px var(--wf-color-border-button);
+  color: var(--wf-color-fg-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wf-chip:hover {
+  background: var(--wf-color-surface-subtle);
+}
+
+.wf-chip[aria-pressed="true"] {
+  background: var(--wf-color-fg);
+  box-shadow: none;
+  color: var(--wf-color-fg-on-primary);
+}
+
+.wf-chip-count {
+  font-weight: 500;
+  color: var(--wf-color-fg-subtle);
+}
+
+.wf-chip[aria-pressed="true"] .wf-chip-count {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.wf-tag {
+  flex: none;
+  width: 52px;
+  padding: 2px 0;
+  border-radius: 5px;
+  background: var(--wf-tag-bg);
+  color: var(--wf-tag-fg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.wf-tag-do {
+  --wf-tag-bg: var(--wf-tag-do-bg);
+  --wf-tag-fg: var(--wf-tag-do-fg);
+}
+
+.wf-tag-track {
+  --wf-tag-bg: var(--wf-tag-track-bg);
+  --wf-tag-fg: var(--wf-tag-track-fg);
+}
+
+.wf-tag-decide {
+  --wf-tag-bg: var(--wf-tag-decide-bg);
+  --wf-tag-fg: var(--wf-tag-decide-fg);
+}
+
+.wf-tag-read {
+  --wf-tag-bg: var(--wf-tag-read-bg);
+  --wf-tag-fg: var(--wf-tag-read-fg);
+}
+
+.wf-tag-keep {
+  --wf-tag-bg: var(--wf-tag-keep-bg);
+  --wf-tag-fg: var(--wf-tag-keep-fg);
+}
+
+.wf-list-row {
+  display: flex;
+  align-items: center;
+  padding-right: var(--wf-space-2);
+}
+
+/* The round Done: a ring that shows its check on hover and focus. */
+.wf-check {
+  flex: none;
+  align-self: stretch;
+  width: 44px;
+  min-height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--wf-radius-lg) 0 0 var(--wf-radius-lg);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  color: var(--wf-color-fg-subtle);
+}
+
+.wf-check-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--wf-radius-full);
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  display: grid;
+  place-items: center;
+}
+
+.wf-check-ring svg {
+  opacity: 0;
+}
+
+.wf-check:hover:not(:disabled),
+.wf-check:focus-visible {
+  color: var(--wf-color-success);
+}
+
+.wf-check:hover:not(:disabled) .wf-check-ring svg,
+.wf-check:focus-visible .wf-check-ring svg {
+  opacity: 1;
+}
+
+.wf-list-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-2);
+  padding: 10px 0;
+  border: 0;
+  border-radius: var(--wf-radius-xs);
+  background: transparent;
+  text-align: left;
+}
+
+.wf-list-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wf-space-1);
+}
+
+.wf-list-line {
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-2);
+  min-width: 0;
+}
+
+.wf-list-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Lined up under the title, past the 52px chip and its gap. */
+.wf-list-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-2);
+  padding-left: 60px;
+  font-size: 13px;
+  color: var(--wf-color-fg-subtle);
+}
+
+.wf-list-sites {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-date-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wf-space-1);
+  padding: 1px var(--wf-space-2);
+  border-radius: var(--wf-radius-full);
+  background: var(--wf-date-bg);
+  color: var(--wf-date-fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wf-date-soon {
+  background: var(--wf-date-soon-bg);
+  color: var(--wf-date-soon-fg);
+}
+
+.wf-list-details {
+  padding: 0 var(--wf-space-4) var(--wf-space-4) 44px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wf-space-3);
+}
+
+.wf-next {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--wf-space-2);
+}
+
+.wf-next-step {
+  flex: 1;
+  min-width: 0;
+  padding-top: 7px;
+  font-size: 14px;
+  color: var(--wf-color-fg);
+  overflow-wrap: anywhere;
+}
+
+.wf-list-details .wf-why {
+  margin-top: -8px;
+  color: var(--wf-color-fg-muted);
+}
+
+.wf-datebox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px var(--wf-space-3);
+  border-radius: var(--wf-radius-md);
+  background: var(--wf-datebox-bg);
+}
+
+.wf-datebox .wf-calendar {
+  flex: none;
+  margin-top: 1px;
+  color: var(--wf-date-fg);
+}
+
+.wf-datebox-soon {
+  background: var(--wf-datebox-soon-bg);
+}
+
+.wf-datebox-soon .wf-calendar {
+  color: var(--wf-date-soon-fg);
+}
+
+.wf-datebox-when {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wf-color-fg);
+}
+
+.wf-datebox-source {
+  font-size: 12px;
+  color: var(--wf-color-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Empty while there are results: out of the flow (no gap), but still rendered, so it stays a live region. */
+.wf-no-matches:empty {
+  position: absolute;
+}
+
+.wf-list-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-2);
+}
+
+.wf-next .wf-text-button,
+.wf-list-actions .wf-text-button {
+  height: 36px;
+  align-self: auto;
 }
 
 /* ---------- tabs ---------- */
@@ -609,8 +913,8 @@ a.wf-tab:hover {
 
 .wf-tab-remove {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border: 0;
   border-radius: var(--wf-radius-sm);
   background: transparent;
@@ -843,11 +1147,40 @@ a.wf-tab:hover {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+}
+
+.wf-result-line {
+  display: flex;
+  align-items: center;
+  gap: var(--wf-space-2);
+  min-width: 0;
+}
+
+.wf-result-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Lined up under the title, past the 52px chip and its gap. */
+.wf-result-lines {
+  display: flex;
+  flex-direction: column;
+  padding-left: 60px;
+}
+
+.wf-result-lines:empty {
+  display: none;
 }
 
 .wf-result-task {
-  font-weight: 600;
   font-size: 13px;
+  color: var(--wf-color-fg-body);
   overflow-wrap: anywhere;
 }
 
