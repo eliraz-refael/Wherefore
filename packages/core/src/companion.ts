@@ -35,6 +35,12 @@ export const EXTENSION_ORIGIN = `chrome-extension://${EXTENSION_ID}/`
  */
 export const NATIVE_HOST_NAME = "io.github.eliraz_refael.wherefore"
 
+/** The companion's npm package (packages/companion; a test there keeps the two equal). */
+export const COMPANION_PACKAGE = "@eliraz-refael/wherefore"
+
+/** What the extension tells the user to run to install the companion. */
+export const COMPANION_INSTALL_COMMAND = `npx ${COMPANION_PACKAGE} install`
+
 /**
  * Bumped when the frames below change incompatibly. Both sides refuse a different version.
  * 2 (M2 PR C): `ToBroker`/`FromBroker`, so a broker that can't start agents says so at the handshake.

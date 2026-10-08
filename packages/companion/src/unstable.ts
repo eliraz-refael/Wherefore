@@ -1,5 +1,5 @@
 /**
- * The only file in @wherefore/companion that imports from `effect/unstable/*`, from
+ * The only file in @eliraz-refael/wherefore that imports from `effect/unstable/*`, from
  * `@effect/platform-node-shared` (Node implementations of those same unstable modules, which move
  * with them), and from `@agentclientprotocol/sdk` (the ACP protocol, a 1.x library we keep behind
  * one service of ours, architecture A1).

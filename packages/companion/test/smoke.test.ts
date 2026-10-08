@@ -7,7 +7,7 @@ describe("companion smoke", () => {
   it.effect("links @wherefore/core through the workspace", () =>
     Effect.sync(() => {
       expect(corePackageName).toBe("@wherefore/core")
-      expect(packageName).toBe("@wherefore/companion")
+      expect(packageName).toBe("@eliraz-refael/wherefore")
     }))
 
   it("resolves the effect/unstable/{ai,cli,process,rpc,socket} seams", () => {

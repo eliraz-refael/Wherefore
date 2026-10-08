@@ -1,12 +1,41 @@
 {
-  "name": "@wherefore/companion",
-  "version": "0.0.0",
+  "name": "@eliraz-refael/wherefore",
+  "version": "0.1.0",
+  "description": "Wherefore companion: lets Claude Code (ACP or MCP) reach your open tabs through the Wherefore Chrome extension",
+  "keywords": [
+    "wherefore",
+    "chrome-extension",
+    "native-messaging",
+    "mcp",
+    "acp",
+    "claude-code",
+    "tabs"
+  ],
   "license": "GPL-3.0-or-later",
-  "private": true,
+  "author": "Eliraz Kedmi",
+  "homepage": "https://github.com/eliraz-refael/Wherefore/tree/main/packages/companion#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eliraz-refael/Wherefore.git",
+    "directory": "packages/companion"
+  },
+  "bugs": {
+    "url": "https://github.com/eliraz-refael/Wherefore/issues"
+  },
   "type": "module",
-  "sideEffects": false,
-  "exports": {
-    ".": "./src/index.ts"
+  "bin": {
+    "wherefore": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "rolldown -c rolldown.config.mjs",
@@ -14,22 +43,17 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
-  "dependencies": {
+  "devDependencies": {
     "@agentclientprotocol/sdk": "1.5.0",
     "@effect/platform-node-shared": "4.0.0-rc.117",
-    "@wherefore/core": "workspace:*",
-    "effect": "4.0.0-rc.117",
-    "zod": "4.6.5"
-  },
-  "devDependencies": {
     "@effect/vitest": "4.0.0-rc.116",
     "@types/node": "22.20.4",
+    "@wherefore/core": "workspace:*",
+    "effect": "4.0.0-rc.117",
     "rolldown": "1.2.9",
     "typescript": "7.0.2",
     "vite": "8.3.0",
-    "vitest": "5.0.1"
-  },
-  "bin": {
-    "wherefore": "dist/cli.js"
+    "vitest": "5.0.1",
+    "zod": "4.6.5"
   }
 }

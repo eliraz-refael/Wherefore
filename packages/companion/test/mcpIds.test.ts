@@ -36,15 +36,15 @@ describe("session ids", () => {
 })
 
 describe("the Claude Code hookup", () => {
-  it("registers `mcp` with the pinned Node, quoting paths that need it", () => {
-    expect(claudeMcpAdd("darwin", "/usr/local/bin/node", "/src/wf/packages/companion/dist/cli.js")).toBe(
-      "claude mcp add --scope user wherefore -- /usr/local/bin/node /src/wf/packages/companion/dist/cli.js mcp"
+  it("registers `mcp` through the launcher, quoting paths that need it", () => {
+    expect(claudeMcpAdd({ platform: "darwin", home: "/Users/ada", env: {} })).toBe(
+      "claude mcp add --scope user wherefore -- /Users/ada/.wherefore/bin/wherefore mcp"
     )
-    expect(claudeMcpAdd("linux", "/opt/node/bin/node", "/home/me/My Code/cli.js")).toBe(
-      "claude mcp add --scope user wherefore -- /opt/node/bin/node '/home/me/My Code/cli.js' mcp"
+    expect(claudeMcpAdd({ platform: "linux", home: "/home/me", env: { WHEREFORE_HOME: "/home/me/My State" } })).toBe(
+      "claude mcp add --scope user wherefore -- '/home/me/My State/bin/wherefore' mcp"
     )
-    expect(claudeMcpAdd("win32", "C:\\Program Files\\nodejs\\node.exe", "C:\\wf\\cli.js")).toBe(
-      "claude mcp add --scope user wherefore -- \"C:\\Program Files\\nodejs\\node.exe\" C:\\wf\\cli.js mcp"
+    expect(claudeMcpAdd({ platform: "win32", home: "C:\\Users\\Ada Lovelace", env: {} })).toBe(
+      "claude mcp add --scope user wherefore -- cmd /c \"C:\\Users\\Ada Lovelace\\.wherefore\\bin\\wherefore.cmd\" mcp"
     )
   })
 })
