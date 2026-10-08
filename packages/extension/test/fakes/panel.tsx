@@ -76,6 +76,13 @@ export const itemsEnvelope = (data: unknown) => ({ version: itemsKey.version, da
 
 export const ISO_NOW = () => new Date().toISOString()
 
+/**
+ * When a fixture item was saved, unless the test says: one instant for all of them, so items built
+ * together tie and the list keeps their stored order. (Stamping each with the clock let the list's
+ * newest-first order flip whenever a millisecond passed between building two of them.)
+ */
+const SAVED_AT = ISO_NOW()
+
 /** A saved item in its stored (JSON) form. */
 export const storedItem = (fields: {
   readonly id: string
@@ -94,7 +101,7 @@ export const storedItem = (fields: {
   why: "Because",
   tabs: fields.tabs.map((tab) => ({ ...tab, domain: new URL(tab.url).hostname.replace(/^www\./, "") })),
   status: fields.status ?? "open",
-  savedAt: fields.savedAt ?? ISO_NOW(),
+  savedAt: fields.savedAt ?? SAVED_AT,
   ...(fields.status === "done" ? { doneAt: fields.doneAt ?? ISO_NOW() } : {})
 })
 
