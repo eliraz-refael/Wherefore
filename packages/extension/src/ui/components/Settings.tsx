@@ -13,6 +13,7 @@ import {
   agentLabel,
   API_MODELS,
   type ApiModel,
+  COMPANION_INSTALL_COMMAND,
   type CompanionStatus,
   DEFAULT_AGENT_COMMAND,
   isApiModel,
@@ -369,9 +370,14 @@ function Companion({ status }: { readonly status: CompanionStatus }) {
         </div>
         {status._tag === "NotInstalled"
           ? (
-            <p className="wf-settings-row wf-settings-divider wf-sub">
-              <a href={COMPANION_README_URL} target="_blank" rel="noreferrer">How to install the companion</a>
-            </p>
+            <div className="wf-settings-row wf-settings-divider wf-sub wf-install-steps">
+              <span>In a terminal (Node 22 or newer), run</span>
+              <code className="wf-command">{COMPANION_INSTALL_COMMAND}</code>
+              <span>
+                then press Check again.{" "}
+                <a href={COMPANION_README_URL} target="_blank" rel="noreferrer">How to install the companion</a>
+              </span>
+            </div>
           )
           : null}
       </div>

@@ -10,10 +10,10 @@
  * Either way, what Claude gets to see, in one line.
  */
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { API_MODELS, DEFAULT_MODEL } from "@wherefore/core"
+import { API_MODELS, COMPANION_INSTALL_COMMAND, DEFAULT_MODEL } from "@wherefore/core"
 import { type FormEvent, useState } from "react"
 import { AsyncResult } from "../../unstable.ts"
-import { chooseApiKey, startWithClaudeCode } from "../actions.ts"
+import { checkCompanion, chooseApiKey, startWithClaudeCode } from "../actions.ts"
 import { companionAtom, openTabsAtom, screenAtom } from "../atoms.ts"
 import { useAct } from "../hooks.ts"
 import { LogoIcon } from "./common.tsx"
@@ -21,7 +21,7 @@ import { PRIVACY_SHORT } from "./privacy.ts"
 
 const KEYS_URL = "https://console.anthropic.com/settings/keys"
 
-/** The companion's install steps (its README, in this repository). */
+/** The companion's install steps in full (its README, in this repository). */
 export const COMPANION_README_URL = "https://github.com/eliraz-refael/Wherefore/blob/main/packages/companion/README.md"
 
 export function Onboarding() {
@@ -134,8 +134,11 @@ function ApiKeyPath({ connected, onUseClaudeCode }: { readonly connected: boolea
           )
           : (
             <>
-              Use Claude Code instead:{" "}
-              <a href={COMPANION_README_URL} target="_blank" rel="noreferrer">install the companion</a>
+              Use Claude Code instead: run <code className="wf-command">{COMPANION_INSTALL_COMMAND}</code> in a terminal,
+              then{" "}
+              <button type="button" className="wf-inline-link" onClick={() => act(checkCompanion)}>check again</button>
+              {" · "}
+              <a href={COMPANION_README_URL} target="_blank" rel="noreferrer">About the companion</a>
             </>
           )}
       </p>

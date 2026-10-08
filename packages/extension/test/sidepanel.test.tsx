@@ -77,6 +77,7 @@ describe("Settings: companion", () => {
     fireEvent.click(await view.ui.findByRole("button", { name: "Settings" }))
     expect(await view.ui.findByText("Not installed. Claude Code and MCP need it; an API key doesn't.")).toBeTruthy()
     expect(view.ui.getByRole("link", { name: "How to install the companion" }).getAttribute("href")).toContain("packages/companion/README.md")
+    expect(view.ui.getByText("npx @eliraz-refael/wherefore install").tagName).toBe("CODE")
 
     native.mode = "answer"
     fireEvent.click(view.ui.getByRole("button", { name: "Check again" }))
@@ -1296,14 +1297,21 @@ describe("Tidy up, with Claude Code (ACP)", () => {
     }
   })
 
-  it("without the companion, first run is the API key, with a hint to install the companion", async () => {
-    const app = make(new FakeChrome({ tabs: RUN_TABS }))
+  it("without the companion, first run is the API key, with how to install the companion", async () => {
+    const native = new FakeNativeHost("missing")
+    const app = make(new FakeChrome({ tabs: RUN_TABS }), new ScriptedModel([]), native)
     await app.start()
     const view = app.open()
     expect(await view.ui.findByLabelText("Anthropic API key")).toBeTruthy()
-    const link = view.ui.getByRole("link", { name: "install the companion" })
+    expect(view.ui.getByText("npx @eliraz-refael/wherefore install").tagName).toBe("CODE")
+    const link = view.ui.getByRole("link", { name: "About the companion" })
     expect(link.getAttribute("href")).toBe("https://github.com/eliraz-refael/Wherefore/blob/main/packages/companion/README.md")
     expect(view.ui.queryByRole("button", { name: /Tidy up my/ })).toBeNull()
+
+    // Installed meanwhile: "check again" finds it, and Claude Code becomes the way in.
+    native.mode = "answer"
+    fireEvent.click(view.ui.getByRole("button", { name: "check again" }))
+    expect(await view.ui.findByRole("button", { name: /Tidy up my/ })).toBeTruthy()
   })
 
   it("shows why the agent couldn't run, and offers to start again", async () => {

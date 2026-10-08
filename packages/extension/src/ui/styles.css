@@ -1384,6 +1384,25 @@ a.wf-tab:hover {
   padding-block: var(--wf-space-3);
 }
 
+/* The companion's install command, under "Not installed". */
+.wf-install-steps {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--wf-space-2);
+}
+
+/* A command to run in a terminal: one click selects all of it. */
+.wf-command {
+  padding: 1px 5px;
+  border-radius: var(--wf-radius-sm);
+  background: var(--wf-color-track);
+  color: var(--wf-color-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* Read by screen readers, not shown. */
 .wf-visually-hidden {
   position: absolute;
