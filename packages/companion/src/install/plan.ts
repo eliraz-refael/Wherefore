@@ -23,8 +23,9 @@
  * from its own copy for every ACP tidy-up, and a `claude mcp add` line may still point at the
  * previous one.
  *
- * Next to the wrapper, `install` writes a **launcher**, `<state>/wherefore` (`wherefore.cmd` on
- * Windows): the same pinned Node and CLI, every argument passed on. Claude Code's MCP config names
+ * Next to the wrapper, `install` writes a **launcher**, `<state>/bin/wherefore` (`bin\wherefore.cmd`
+ * on Windows; in its own folder, so it can't clash with a `Wherefore` folder on a case-insensitive
+ * file system): the same pinned Node and CLI, every argument passed on. Claude Code's MCP config names
  * the launcher (`claudeMcpAdd`), so that config never changes when the copy does.
  */
 import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "@wherefore/core"
@@ -186,9 +187,12 @@ export const keptVersions = (
 export const prunableCopies = (names: ReadonlyArray<string>, kept: ReadonlySet<string>): ReadonlyArray<string> =>
   names.filter((name) => isVersionName(name) && !kept.has(name)).sort()
 
+/** Where the launcher lives. */
+export const launcherDir = (location: Location): string => pathFor(location.platform).join(stateDir(location), "bin")
+
 /** The launcher: runs the installed CLI with any arguments (`claude mcp add` names it). */
 export const launcherPath = (location: Location): string =>
-  pathFor(location.platform).join(stateDir(location), location.platform === "win32" ? "wherefore.cmd" : "wherefore")
+  pathFor(location.platform).join(launcherDir(location), location.platform === "win32" ? "wherefore.cmd" : "wherefore")
 
 /** The Windows host manifest lives in the state directory; the registry points at it. */
 export const windowsManifestPath = (location: Location): string =>
@@ -384,7 +388,7 @@ export const planInstall = (
   const path = pathFor(platform)
   const wrapper = wrapperPath(location)
   const manifest = `${JSON.stringify(hostManifest(wrapper), null, 2)}\n`
-  const dirs: Array<string> = [stateDir(location)]
+  const dirs: Array<string> = [stateDir(location), launcherDir(location)]
   const files: Array<FileWrite> = [
     { path: wrapper, content: wrapperScript(platform, input), mode: 0o755 },
     { path: launcherPath(location), content: launcherScript(platform, input), mode: 0o755 }
@@ -414,8 +418,10 @@ export const planInstall = (
 export interface UninstallPlan {
   /** Files to remove if present. */
   readonly files: ReadonlyArray<string>
-  /** Directories to remove with everything in them, if present: the CLI's copies. */
+  /** Copies directories: their version directories go, then the directory itself if that empties it. */
   readonly dirs: ReadonlyArray<string>
+  /** Directories to remove once the files are gone, only if empty: the launcher's. */
+  readonly emptyDirs: ReadonlyArray<string>
   readonly commands: ReadonlyArray<Command & { readonly browser: string }>
 }
 
@@ -429,7 +435,7 @@ export const planUninstall = (location: Location): UninstallPlan => {
     if (target.registryKey !== undefined) commands.push({ ...registryDelete(target.registryKey), browser: target.browser })
     if (target.manifestDir !== undefined) files.push(path.join(target.manifestDir, manifestFileName))
   }
-  return { files, dirs: [copiesDir(location)], commands }
+  return { files, dirs: [copiesDir(location)], emptyDirs: [launcherDir(location)], commands }
 }
 
 /** Quotes an argument for the user's shell when it needs it (POSIX shells, or cmd/PowerShell). */

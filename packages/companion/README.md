@@ -60,9 +60,9 @@ wrapper runs that copy, so it keeps working when npm clears `npx`'s cache or a g
 upgraded. It removes older copies, except the previous one and any a running broker still uses.
 A build in a checkout (a `src/` next to its `dist/`) is not copied: the wrapper runs it in place, so a
 rebuild takes effect the next time Chrome starts the host, and if you move the checkout you run
-`install` again. `install` also writes a launcher, `~/.wherefore/wherefore` (`wherefore.cmd` on
+`install` again. `install` also writes a launcher, `~/.wherefore/bin/wherefore` (`bin\wherefore.cmd` on
 Windows), which runs the current copy (or the checkout's build) with the same Node and passes its
-arguments on: `~/.wherefore/wherefore status` works whichever way you installed, and it is what
+arguments on: `~/.wherefore/bin/wherefore status` works whichever way you installed, and it is what
 Claude Code's MCP config names, so that config survives updates. `status` shows which copy Chrome
 and the launcher run, and reports a wrapper whose `cli.js` or pinned Node is gone as
 `needs install`.
@@ -145,10 +145,10 @@ brokers, and gives an MCP client (Claude Code, or any other) Wherefore's five to
 `install` prints the command that adds it to Claude Code, through the launcher:
 
 ```sh
-claude mcp add --scope user wherefore -- /Users/you/.wherefore/wherefore mcp
+claude mcp add --scope user wherefore -- /Users/you/.wherefore/bin/wherefore mcp
 ```
 
-(on Windows, `-- cmd /c C:\Users\you\.wherefore\wherefore.cmd mcp`). The line is the same after
+(on Windows, `-- cmd /c C:\Users\you\.wherefore\bin\wherefore.cmd mcp`). The line is the same after
 every update, so you add it once. If you added Wherefore to Claude Code with an older companion
 (whose line named `node` and a `cli.js`), `install` says so once: run
 `claude mcp remove --scope user wherefore`, then add the new line.
@@ -183,8 +183,9 @@ Logs go to stderr (Claude Code shows them with `claude --debug`), and never incl
 wherefore uninstall
 ```
 
-removes the manifests, the registry keys (Windows), the wrapper script and the copies in
-`~/.wherefore/companion`. With a global install, `npm uninstall -g @eliraz-refael/wherefore` then
+removes the manifests, the registry keys (Windows), the wrapper script, the launcher and the
+copies in `~/.wherefore/companion` (only the version folders it made: `companion/` and `bin/` go only
+if nothing else is in them). With a global install, `npm uninstall -g @eliraz-refael/wherefore` then
 removes the package itself; `claude mcp remove --scope user wherefore` removes the MCP server. A running broker stops
 when Chrome closes its connection: reload the extension or restart Chrome.
 
@@ -193,7 +194,7 @@ when Chrome closes its connection: reload the extension or restart Chrome.
 | | |
 | --- | --- |
 | `~/.wherefore/native-host.sh` / `.bat` | What Chrome runs |
-| `~/.wherefore/wherefore` / `wherefore.cmd` | The launcher: the current companion, for Claude Code and your terminal |
+| `~/.wherefore/bin/wherefore` / `wherefore.cmd` | The launcher: the current companion, for Claude Code and your terminal |
 | `~/.wherefore/companion/<version>/cli.js` | The copy of the companion it starts (`%USERPROFILE%\.wherefore\companion\…` on Windows) |
 | `~/.wherefore/run/<profile>.json` | One file per live broker: profile id, pid, socket, versions, access token |
 | `~/.wherefore/run/<profile>.<pid>.sock` | The broker's socket (macOS, Linux). On Windows a named pipe, `\\.\pipe\wherefore-…` |

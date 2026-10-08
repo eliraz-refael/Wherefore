@@ -38,13 +38,13 @@ describe("session ids", () => {
 describe("the Claude Code hookup", () => {
   it("registers `mcp` through the launcher, quoting paths that need it", () => {
     expect(claudeMcpAdd({ platform: "darwin", home: "/Users/ada", env: {} })).toBe(
-      "claude mcp add --scope user wherefore -- /Users/ada/.wherefore/wherefore mcp"
+      "claude mcp add --scope user wherefore -- /Users/ada/.wherefore/bin/wherefore mcp"
     )
     expect(claudeMcpAdd({ platform: "linux", home: "/home/me", env: { WHEREFORE_HOME: "/home/me/My State" } })).toBe(
-      "claude mcp add --scope user wherefore -- '/home/me/My State/wherefore' mcp"
+      "claude mcp add --scope user wherefore -- '/home/me/My State/bin/wherefore' mcp"
     )
     expect(claudeMcpAdd({ platform: "win32", home: "C:\\Users\\Ada Lovelace", env: {} })).toBe(
-      "claude mcp add --scope user wherefore -- cmd /c \"C:\\Users\\Ada Lovelace\\.wherefore\\wherefore.cmd\" mcp"
+      "claude mcp add --scope user wherefore -- cmd /c \"C:\\Users\\Ada Lovelace\\.wherefore\\bin\\wherefore.cmd\" mcp"
     )
   })
 })

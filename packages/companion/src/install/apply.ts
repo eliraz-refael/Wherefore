@@ -252,6 +252,10 @@ export const applyUninstall = (plan: UninstallPlan, run: RunCommand) =>
       if (empty) removed.push(dir)
       else removed.push(...copies.removed)
     }
+    for (const dir of plan.emptyDirs) {
+      // rmdir refuses a directory that isn't empty: whatever else is there stays.
+      if (yield* Effect.promise(() => Fs.rmdir(dir).then(() => true, () => false))) removed.push(dir)
+    }
     for (const command of plan.commands) {
       // Deleting a key that isn't there fails; that is the state we want anyway.
       const result = yield* run(command)

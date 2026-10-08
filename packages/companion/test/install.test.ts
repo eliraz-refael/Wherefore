@@ -24,6 +24,7 @@ import {
   copyVersion,
   isCheckoutBuild,
   keptVersions,
+  launcherDir,
   launcherPath,
   launcherScript,
   planInstall,
@@ -93,7 +94,7 @@ describe("install plan", () => {
     const plan = planInstall(windows, input("C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\Ada Lovelace\\src\\cli.js"), () => false)
     expect(plan.files.map((file) => file.path)).toEqual([
       "C:\\Users\\Ada Lovelace\\.wherefore\\native-host.bat",
-      "C:\\Users\\Ada Lovelace\\.wherefore\\wherefore.cmd",
+      "C:\\Users\\Ada Lovelace\\.wherefore\\bin\\wherefore.cmd",
       `C:\\Users\\Ada Lovelace\\.wherefore\\${NATIVE_HOST_NAME}.json`
     ])
     const manifest = JSON.parse(plan.files[2]?.content ?? "")
@@ -182,14 +183,14 @@ describe("the CLI's stable copy", () => {
   })
 
   it("has a launcher next to the wrapper that runs it with any arguments", () => {
-    expect(launcherPath(mac)).toBe("/Users/Ada Lovelace/.wherefore/wherefore")
-    expect(launcherPath({ ...linux, env: { WHEREFORE_HOME: "/srv/wf" } })).toBe("/srv/wf/wherefore")
-    expect(launcherPath(windows)).toBe("C:\\Users\\Ada Lovelace\\.wherefore\\wherefore.cmd")
-    expect(planUninstall(mac).files).toContain("/Users/Ada Lovelace/.wherefore/wherefore")
-    expect(planInstall(mac, input("/usr/local/bin/node", copyPath(mac, "0.1.0")), () => false).files[1]).toMatchObject({
-      path: "/Users/Ada Lovelace/.wherefore/wherefore",
-      mode: 0o755
-    })
+    expect(launcherPath(mac)).toBe("/Users/Ada Lovelace/.wherefore/bin/wherefore")
+    expect(launcherPath({ ...linux, env: { WHEREFORE_HOME: "/srv/wf" } })).toBe("/srv/wf/bin/wherefore")
+    expect(launcherPath(windows)).toBe("C:\\Users\\Ada Lovelace\\.wherefore\\bin\\wherefore.cmd")
+    expect(planUninstall(mac).files).toContain("/Users/Ada Lovelace/.wherefore/bin/wherefore")
+    expect(planUninstall(mac).emptyDirs).toEqual(["/Users/Ada Lovelace/.wherefore/bin"])
+    const plan = planInstall(mac, input("/usr/local/bin/node", copyPath(mac, "0.1.0")), () => false)
+    expect(plan.dirs.slice(0, 2)).toEqual(["/Users/Ada Lovelace/.wherefore", "/Users/Ada Lovelace/.wherefore/bin"])
+    expect(plan.files[1]).toMatchObject({ path: "/Users/Ada Lovelace/.wherefore/bin/wherefore", mode: 0o755 })
 
     const script = launcherScript("darwin", {
       node: "/opt/my node/bin/node",
@@ -441,12 +442,18 @@ describe("install copies the CLI to a stable place", () => {
       expect(yield* installedCopies(home)).toEqual([])
       expect(yield* Effect.promise(() => Fs.readdir(copiesDir(home)))).toEqual(["notes"])
       expect(existsSync(launcherPath(home))).toBe(false)
+      expect(existsSync(launcherDir(home))).toBe(false)
 
-      // With nothing else in it, the directory goes too.
+      // With nothing else in it, the directory goes too; bin/ stays while something else is in it.
+      yield* Effect.promise(async () => {
+        await Fs.mkdir(launcherDir(home), { recursive: true })
+        await Fs.writeFile(NodePath.join(launcherDir(home), "mine"), "")
+      })
       yield* Effect.promise(() => Fs.rm(NodePath.join(copiesDir(home), "notes"), { recursive: true }))
       yield* install("0.1.0", [])
       expect(yield* applyUninstall(planUninstall(home), record(commands))).toContain(copiesDir(home))
       expect(existsSync(copiesDir(home))).toBe(false)
+      expect(yield* Effect.promise(() => Fs.readdir(launcherDir(home)))).toEqual(["mine"])
     }))
 
   it.live("bakes a relative WHEREFORE_HOME resolved, so the scripts find it from any directory", () =>
@@ -526,8 +533,9 @@ describe("install copies the CLI to a stable place", () => {
       if (process.platform === "win32") return
       const location = yield* tempLocation
       const home: Location = { ...location, platform: process.platform === "darwin" ? "darwin" : "linux" }
-      // Not "Wherefore": on a case-insensitive file system that is the launcher's path.
-      const checkout = NodePath.join(location.home, "checkout", "packages", "companion")
+      // A "Wherefore" folder in the state directory: on a case-insensitive file system it would be
+      // the launcher's path, were the launcher not in bin/.
+      const checkout = NodePath.join(location.home, "Wherefore", "packages", "companion")
       const running = NodePath.join(checkout, "dist", "cli.js")
       yield* Effect.promise(async () => {
         await Fs.mkdir(NodePath.join(checkout, "dist"), { recursive: true })
