@@ -143,6 +143,7 @@ function ResultCard(props: {
   const titleId = `result-${id}-title`
   const tagId = `result-${id}-tag`
   const subId = `result-${id}-sub`
+  const countId = `result-${id}-count`
   const saved = choice?.savedAs !== undefined
   const kept = choice?.keepOpen === true
   const task = taskOf(result, choice)
@@ -169,7 +170,7 @@ function ResultCard(props: {
         aria-expanded={expanded}
         aria-controls={detailsId}
         aria-labelledby={titleId}
-        aria-describedby={`${tagId} ${subId}`}
+        aria-describedby={`${tagId} ${subId} ${countId}`}
         onClick={props.onToggle}
       >
         <span className="wf-result-heading">
@@ -183,7 +184,7 @@ function ResultCard(props: {
             {meta === undefined ? null : <span className="wf-result-meta">{meta}</span>}
           </span>
         </span>
-        <span className="wf-result-count" aria-label={tabCount(count)}>{count}</span>
+        <span id={countId} className="wf-result-count" aria-label={tabCount(count)}>{count}</span>
         <ChevronIcon open={expanded} />
       </button>
       {expanded
