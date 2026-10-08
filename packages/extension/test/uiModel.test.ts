@@ -185,7 +185,7 @@ describe("Your list: sections, search and filter", () => {
       item("decide", { tag: "decide" }),
       item("done", { status: "done", doneAt: "2026-10-06T09:00:00.000Z" })
     ])
-    const { comingUp, anytime } = listSections(items, { filter: "all", query: "" })
+    const { comingUp, anytime } = listSections(items, { filter: "all", query: "", keep: null })
     expect(ids(comingUp)).toEqual(["overdue", "soon", "later"])
     expect(ids(anytime)).toEqual(["do1", "do2", "track", "decide", "read", "keep"])
     expect(tagCounts(items)).toEqual({ do: 3, track: 1, decide: 1, read: 2, keep: 2 })
@@ -210,8 +210,15 @@ describe("Your list: sections, search and filter", () => {
     // A tab with no saved domain is matched by its URL's.
     expect(matchesSearch(desk, searchWords("SHOP.example oak"))).toBe(true)
     expect(matchesSearch(desk, searchWords("desk github"))).toBe(false)
-    expect(ids(listSections([desk, item("x")], { filter: "all", query: "oak" }).anytime)).toEqual(["desk"])
-    expect(ids(listSections([desk, item("x", { tag: "read" })], { filter: "read", query: "" }).anytime)).toEqual(["x"])
+    expect(ids(listSections([desk, item("x")], { filter: "all", query: "oak", keep: null }).anytime)).toEqual(["desk"])
+    expect(ids(listSections([desk, item("x", { tag: "read" })], { filter: "read", query: "", keep: null }).anytime)).toEqual(["x"])
+  })
+
+  it("keeps the item being edited, whatever the search and filter say", () => {
+    const items = [item("edited", { tag: "do" }), item("other", { tag: "read" })]
+    expect(ids(listSections(items, { filter: "read", query: "nothing", keep: "edited" }).anytime)).toEqual(["edited"])
+    expect(ids(listSections(items, { filter: "read", query: "", keep: "edited" }).anytime)).toEqual(["edited", "other"])
+    expect(ids(listSections(items, { filter: "read", query: "", keep: null }).anytime)).toEqual(["other"])
   })
 
   it("says how many tabs and which sites, at most two", () => {

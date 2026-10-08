@@ -69,15 +69,18 @@ export interface ListSections {
 }
 
 /**
- * The items that match `filter` and `query`, in sections. `items` are the open items in list
- * order (`openItems`); the sorts are stable, so ties keep it.
+ * The items that match `filter` and `query`, in sections, plus `keep` whatever they say (the item
+ * being edited: hiding it would lose the draft). `items` are the open items in list order
+ * (`openItems`); the sorts are stable, so ties keep it.
  */
 export const listSections = (
   items: ReadonlyArray<SavedItem>,
-  { filter, query }: { readonly filter: TagFilter; readonly query: string }
+  { filter, query, keep }: { readonly filter: TagFilter; readonly query: string; readonly keep: string | null }
 ): ListSections => {
   const words = searchWords(query)
-  const shown = items.filter((item) => (filter === "all" || item.tag === filter) && matchesSearch(item, words))
+  const shown = items.filter((item) =>
+    item.id === keep || ((filter === "all" || item.tag === filter) && matchesSearch(item, words))
+  )
   return {
     comingUp: shown.filter(hasDate).sort((a, b) => dateOf(a).localeCompare(dateOf(b))),
     anytime: shown.filter((item) => !hasDate(item)).sort((a, b) => TAG_ORDER.indexOf(a.tag) - TAG_ORDER.indexOf(b.tag))

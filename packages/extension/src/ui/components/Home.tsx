@@ -154,7 +154,8 @@ function YourList({ items }: { readonly items: ReadonlyArray<SavedItem> }) {
   // when an item with that tag is saved later (adjusting state while rendering, as React allows).
   if (picked !== "all" && counts[picked] === 0) setPicked("all")
   const filter: TagFilter = picked !== "all" && counts[picked] === 0 ? "all" : picked
-  const { comingUp, anytime } = listSections(open, { filter, query })
+  // The item being edited stays in view, so a search or chip doesn't lose its draft.
+  const { comingUp, anytime } = listSections(open, { filter, query, keep: editing })
 
   const section = (id: string, title: string, group: ReadonlyArray<SavedItem>) =>
     group.length === 0 ? null : (

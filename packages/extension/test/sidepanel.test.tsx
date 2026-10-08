@@ -459,6 +459,29 @@ describe("Your list", () => {
     expect(rowTitles(view.ui)).toHaveLength(5)
   })
 
+  it("an item being edited stays in view, with its draft, when a search or chip would hide it", async () => {
+    const chrome = listChrome()
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: "Pick a desk" }))
+    fireEvent.click(view.ui.getByRole("button", { name: "Edit" }))
+    fireEvent.change(view.ui.getByLabelText("Next step"), { target: { value: "Pick a standing desk" } })
+
+    search(view, "vite")
+    expect(rowTitles(view.ui)).toEqual(["Pick a desk", "Watch the Vite release"])
+    expect((view.ui.getByLabelText("Next step") as HTMLInputElement).value).toBe("Pick a standing desk")
+    fireEvent.click(view.ui.getByRole("button", { name: "Track 1" }))
+    expect(rowTitles(view.ui)).toEqual(["Pick a desk", "Watch the Vite release"])
+    expect((view.ui.getByLabelText("Next step") as HTMLInputElement).value).toBe("Pick a standing desk")
+
+    // Once editing ends, the search and chip apply to it again.
+    fireEvent.click(view.ui.getByRole("button", { name: "Cancel" }))
+    expect(rowTitles(view.ui)).toEqual(["Watch the Vite release"])
+    expect(storedData(chrome, "items").find((item: any) => item.id === "e").task).toBe("Pick a desk")
+  })
+
   /** A day `offset` days from today, as YYYY-MM-DD in the user's zone. */
   const dayFromToday = (offset: number): string => {
     const now = new Date()
