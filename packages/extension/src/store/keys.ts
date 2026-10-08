@@ -23,9 +23,11 @@ const tagOfType: ReadonlyMap<unknown, ItemTag> = new Map([
   ["keep", "keep"]
 ])
 
+const trimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "")
+
 /**
  * Items, version 1 to 2: the type becomes a tag, and the title is the intention's title (else the
- * task). Version 1 had no due dates. Anything else is left for the schema to judge.
+ * task), trimmed. Version 1 had no due dates. Anything else is left for the schema to judge.
  */
 const itemsV2 = (data: unknown): unknown => {
   if (!Array.isArray(data)) throw new Error("not a list")
@@ -34,8 +36,9 @@ const itemsV2 = (data: unknown): unknown => {
     const { type, ...rest } = item as Readonly<Record<string, unknown>>
     const tag = tagOfType.get(type)
     if (tag === undefined) throw new Error(`unknown item type ${JSON.stringify(type)}`)
-    const intention = typeof rest["intention"] === "string" ? rest["intention"].trim() : ""
-    return { ...rest, tag, title: intention !== "" ? intention : rest["task"] }
+    // A task that is only spaces stays as it was, so the title is never empty.
+    const title = [trimmed(rest["intention"]), trimmed(rest["task"])].find((text) => text !== "") ?? rest["task"]
+    return { ...rest, tag, title }
   })
 }
 

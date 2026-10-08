@@ -108,9 +108,10 @@ describe("Store items migrations", () => {
     Effect.gen(function*() {
       const v1 = [
         v1Item("a", "todo"),
-        v1Item("b", "follow_up", { intention: "  " }),
+        v1Item("b", "follow_up", { intention: "  ", task: "  Task b \n" }),
         v1Item("c", "read", { status: "done", doneAt: "2026-10-05T08:00:00.000Z" }),
-        v1Item("d", "keep", { tabs: [{ title: "Docs", url: "https://docs.example/", faviconUrl: "https://docs.example/f.ico", domain: "docs.example" }] })
+        v1Item("d", "keep", { tabs: [{ title: "Docs", url: "https://docs.example/", faviconUrl: "https://docs.example/f.ico", domain: "docs.example" }] }),
+        v1Item("e", "todo", { intention: "", task: "   " })
       ]
       const chrome = new FakeChrome({ local: { items: { version: 1, data: v1 } } })
       const store = makeStore(chrome.api)
@@ -120,9 +121,10 @@ describe("Store items migrations", () => {
       expect(written.version).toBe(2)
       expect(written.data.map((item) => [item["id"], item["tag"], item["title"], item["task"]])).toEqual([
         ["a", "do", "Intention a", "Task a"],
-        ["b", "track", "Task b", "Task b"],
+        ["b", "track", "Task b", "  Task b \n"], // the title is trimmed; the task is kept as it was
         ["c", "read", "Intention c", "Task c"],
-        ["d", "keep", "Intention d", "Task d"]
+        ["d", "keep", "Intention d", "Task d"],
+        ["e", "do", "   ", "   "] // nothing to trim to: the title stays non-empty
       ])
       // Nothing else changes: no type, no due date, the rest as it was.
       for (const [i, item] of written.data.entries()) {
@@ -130,7 +132,7 @@ describe("Store items migrations", () => {
         expect(item).toEqual({ ...rest, tag: item["tag"], title: item["title"] })
       }
       const items = yield* store.read(itemsKey)
-      expect(items.map((item) => [item.id, item.status])).toEqual([["a", "open"], ["b", "open"], ["c", "done"], ["d", "open"]])
+      expect(items.map((item) => [item.id, item.status])).toEqual([["a", "open"], ["b", "open"], ["c", "done"], ["d", "open"], ["e", "open"]])
       // Written back once: a second read finds the current version and writes nothing.
       const writes = chrome.calls.filter((call) => call === "storage.local.set").length
       yield* store.read(itemsKey)
