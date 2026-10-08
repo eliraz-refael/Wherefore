@@ -1,5 +1,5 @@
 /**
- * @wherefore/companion: the local Node CLI (docs/product/architecture.md, A3).
+ * @eliraz-refael/wherefore: the local Node CLI (docs/product/architecture.md, A3).
  *
  * - The broker: Chrome's native-messaging host, one per connected profile, serving `BrokerRpcs`
  *   on a local socket and forwarding tool calls to the extension's worker (src/broker/).
@@ -13,4 +13,4 @@ export { liveDeps, makeRegistry, type RegistryEntry } from "./broker/registry.ts
 export { type Location, platformOf, registryDir, stateDir } from "./paths.ts"
 export { COMPANION_VERSION } from "./version.ts"
 
-export const packageName = "@wherefore/companion" as const
+export const packageName = "@eliraz-refael/wherefore" as const

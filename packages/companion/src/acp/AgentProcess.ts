@@ -46,7 +46,7 @@ export interface SpawnOptions {
 export class AgentProcesses extends Context.Service<AgentProcesses, {
   /** Starts `command`. The process tree is ended when the scope closes. */
   readonly spawn: (command: string, options: SpawnOptions) => Effect.Effect<AgentProcess, AgentNotFound | AgentFailed, Scope.Scope>
-}>()("@wherefore/companion/AgentProcesses") {
+}>()("@eliraz-refael/wherefore/AgentProcesses") {
   /** Real processes, through the platform's spawner. */
   static readonly layer: Layer.Layer<AgentProcesses, never, ChildProcessSpawner.ChildProcessSpawner> = Layer.effect(AgentProcesses)(
     Effect.gen(function*() {
