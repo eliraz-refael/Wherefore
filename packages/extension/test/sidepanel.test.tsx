@@ -643,6 +643,56 @@ describe("Your list", () => {
     }
   })
 
+  it("catches up when the panel is shown or focused after the computer slept through midnight", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["Date", "setTimeout", "clearTimeout"] })
+    try {
+      vi.setSystemTime(new Date(2026, 9, 8, 23, 59, 50))
+      const chrome = new FakeChrome({
+        local: {
+          settings: SETTINGS,
+          items: itemsEnvelope([
+            storedItem({
+              id: "tax",
+              task: "Tax form",
+              due: { date: "2026-10-08", kind: "due", source: "" },
+              tabs: [{ title: "Tax", url: "https://tax.example/" }]
+            }),
+            storedItem({
+              id: "rent",
+              task: "Rent",
+              due: { date: "2026-10-09", kind: "due", source: "" },
+              tabs: [{ title: "Rent", url: "https://rent.example/" }]
+            })
+          ])
+        }
+      })
+      const app = make(chrome)
+      await app.start()
+      const view = app.open()
+      await view.ui.findByRole("heading", { level: 1, name: "2 things you meant to do" })
+      const pill = (title: string) => view.ui.getByRole("article", { name: title }).querySelector(".wf-date-pill")?.textContent
+      expect(pill("Tax form")).toBe("Thu 8 Oct")
+
+      // Asleep: the clock jumps past midnight, and the midnight timer hasn't run.
+      vi.setSystemTime(new Date(2026, 9, 9, 7, 0))
+      expect(pill("Tax form")).toBe("Thu 8 Oct")
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"))
+      })
+      await waitFor(() => expect(pill("Tax form")).toBe("Overdue · Thu 8 Oct"))
+      expect(pill("Rent")).toBe("Fri 9 Oct")
+
+      // Focus does the same.
+      vi.setSystemTime(new Date(2026, 9, 10, 7, 0))
+      act(() => {
+        window.dispatchEvent(new Event("focus"))
+      })
+      await waitFor(() => expect(pill("Rent")).toBe("Overdue · Fri 9 Oct"))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("renders what the model wrote as text, never as markup", async () => {
     const markup = "<img src=x onerror=alert(1)>"
     const chrome = new FakeChrome({
