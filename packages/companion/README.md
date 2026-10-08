@@ -10,17 +10,32 @@ For each Chrome profile that has the extension, it runs a **broker**: a local so
 call, which forwards their tool calls to the extension. Nothing listens on the network.
 See `docs/product/architecture.md` (A3) for the design.
 
-Until it is published to npm (M4), install it from this repository.
-
 ## Install
 
-Requires Node 22 or newer.
+Requires Node 22 or newer. Run this in a terminal where `claude` and `npx` work:
+
+```sh
+npx @eliraz-refael/wherefore install
+```
+
+**Without npm's registry**, install the tarball from a
+[GitHub Release](https://github.com/eliraz-refael/Wherefore/releases) (tags `companion-v…`):
+
+```sh
+npm install -g https://github.com/eliraz-refael/Wherefore/releases/download/companion-v0.1.0/eliraz-refael-wherefore-0.1.0.tgz
+wherefore install
+```
+
+**From a checkout** (for developing the companion):
 
 ```sh
 pnpm install
 pnpm -C packages/companion build
 node packages/companion/dist/cli.js install
 ```
+
+The commands below say `wherefore`; with `npx`, that is `npx @eliraz-refael/wherefore`, and from a
+checkout `node packages/companion/dist/cli.js`.
 
 `install` registers the native messaging host `io.github.eliraz_refael.wherefore`:
 
@@ -32,7 +47,7 @@ node packages/companion/dist/cli.js install
   `HKCU\Software\<browser>\NativeMessagingHosts\` for Chrome, Chromium, Brave and Edge.
 
 The manifest points at `~/.wherefore/native-host.sh` (`native-host.bat` on Windows), which runs
-`dist/cli.js` with the Node that ran `install`. That Node is pinned by a stable `PATH` entry
+the companion with the Node that ran `install`. That Node is pinned by a stable `PATH` entry
 when one points at it (e.g. `/run/current-system/sw/bin/node` rather than a `/nix/store/...`
 path), and if the pinned Node is ever gone the wrapper falls back to `node` on the copied
 `PATH`. It also copies `PATH`, proxy settings and a few
@@ -40,30 +55,41 @@ other variables from your shell, because Chrome starts it with a minimal environ
 copies API keys. Only the Wherefore extension (`chrome-extension://anpbbaiepneaddgoldgmapilgiflochg/`)
 may start it.
 
-The wrapper runs `dist/cli.js` from your checkout, so a rebuild takes effect the next time Chrome
-starts the host. If you move the checkout, run `install` again; `status` reports a wrapper whose
-`cli.js` or pinned Node is gone as `needs install`.
+`install` copies the companion (one file, `cli.js`) to `~/.wherefore/companion/<version>/` and the
+wrapper runs that copy, so it keeps working when npm clears `npx`'s cache or a global install is
+upgraded. It removes older copies, except the previous one and any a running broker still uses.
+A build in a checkout (a `src/` next to its `dist/`) is not copied: the wrapper runs it in place, so a
+rebuild takes effect the next time Chrome starts the host, and if you move the checkout you run
+`install` again. `status` shows which copy Chrome runs, and reports a wrapper whose `cli.js` or
+pinned Node is gone as `needs install`.
 
 Then reload the extension in `chrome://extensions`, or press **Check again** in its Settings.
 Settings → Companion should say "Connected".
 
 Run `install` from a terminal where `claude` and `npx` work (and where `CLAUDE_CONFIG_DIR` is
 set, if you use it): the wrapper copies that terminal's `PATH` and `CLAUDE_CONFIG_DIR`, and the
-agent the companion starts gets them. After pulling a new version, rebuild, run `install` again
-and reload the extension: the extension and the companion refuse each other's older versions
-(Settings says which one to update).
+agent the companion starts gets them.
+
+**Updating.** Run `npx @eliraz-refael/wherefore@latest install` (or install the newer tarball, or
+pull and rebuild a checkout, then run `install`), and reload the extension: the extension and the
+companion refuse each other's older versions (Settings says which one to update). If you added the
+MCP server to Claude Code (below), `install` says when its path changed.
 
 ## Check it
 
 ```sh
-node packages/companion/dist/cli.js status
+wherefore status
 ```
 
-lists where the host is registered and every live broker (one per connected Chrome profile):
+lists which copy Chrome runs, where the host is registered, and every live broker (one per
+connected Chrome profile):
 
 ```
+Chrome runs the installed copy of 0.1.0:
+  /usr/local/bin/node /Users/you/.wherefore/companion/0.1.0/cli.js
+...
 Brokers (one per connected Chrome profile), registered in /Users/you/.wherefore/run:
-  k3jx...  pid 41235  extension 0.0.0  companion 0.0.0  since 10/6/2026, 9:41:02 PM
+  k3jx...  pid 41235  extension 0.0.0  companion 0.1.0  since 10/6/2026, 9:41:02 PM
 ```
 
 ## Claude Code from the side panel (ACP mode)
@@ -112,11 +138,15 @@ the companion's environment, and gets the same MCP server and the same permissio
 `wherefore mcp` is an MCP server on stdio. It finds every connected Chrome profile through the
 brokers, and gives an MCP client (Claude Code, or any other) Wherefore's five tools: `list_tabs`,
 `read_pages`, `wake_and_read_pages`, `ask_user` and `submit_intentions`, plus a `tidy_up` prompt.
-`install` prints the command that adds it to Claude Code, with the same pinned Node:
+`install` prints the command that adds it to Claude Code, with the same pinned Node and copy:
 
 ```sh
-claude mcp add --scope user wherefore -- /path/to/node /path/to/packages/companion/dist/cli.js mcp
+claude mcp add --scope user wherefore -- /path/to/node /Users/you/.wherefore/companion/0.1.0/cli.js mcp
 ```
+
+After an update the copy's path changes: `claude mcp remove --scope user wherefore`, then add the
+line `install` printed. (`install` keeps the previous copy, so the old line works until the next
+update.)
 
 Then open the Wherefore side panel and ask Claude Code to tidy up your tabs (or run its
 `/mcp__wherefore__tidy_up` prompt). While it works:
@@ -145,10 +175,12 @@ Logs go to stderr (Claude Code shows them with `claude --debug`), and never incl
 ## Uninstall
 
 ```sh
-node packages/companion/dist/cli.js uninstall
+wherefore uninstall
 ```
 
-removes the manifests, the registry keys (Windows) and the wrapper script. A running broker stops
+removes the manifests, the registry keys (Windows), the wrapper script and the copies in
+`~/.wherefore/companion`. With a global install, `npm uninstall -g @eliraz-refael/wherefore` then
+removes the package itself; `claude mcp remove --scope user wherefore` removes the MCP server. A running broker stops
 when Chrome closes its connection: reload the extension or restart Chrome.
 
 ## Where things are
@@ -156,6 +188,7 @@ when Chrome closes its connection: reload the extension or restart Chrome.
 | | |
 | --- | --- |
 | `~/.wherefore/native-host.sh` / `.bat` | What Chrome runs |
+| `~/.wherefore/companion/<version>/cli.js` | The copy of the companion it starts (`%USERPROFILE%\.wherefore\companion\…` on Windows) |
 | `~/.wherefore/run/<profile>.json` | One file per live broker: profile id, pid, socket, versions, access token |
 | `~/.wherefore/run/<profile>.<pid>.sock` | The broker's socket (macOS, Linux). On Windows a named pipe, `\\.\pipe\wherefore-…` |
 
@@ -184,8 +217,8 @@ Run it the way Chrome does to see the error:
 ```
 
 It waits for a message from Chrome on stdin; press Ctrl-D to end it. "No Hello from the
-extension" means it started fine. A Node or `cli.js` path error means the checkout or Node moved:
-run `install` again. Chrome also prints the host's stderr in its own log when started with
+extension" means it started fine. A Node or `cli.js` path error means Node, the copy or the
+checkout moved: run `install` again. Chrome also prints the host's stderr in its own log when started with
 `--enable-logging=stderr`.
 
 **"The socket path is too long."** Unix socket paths are limited to about 100 bytes. Set
@@ -233,3 +266,32 @@ pnpm -C packages/companion smoke      # drive dist/cli.js like Chrome would, no 
 
 ACP mode is tested with a fake ACP agent (`test/fakeAgent.ts`, a real process speaking ACP through
 the SDK's agent side); the tests and the smoke script never run the real `claude-agent-acp`.
+
+## Releasing
+
+The package is `@eliraz-refael/wherefore`, on npm and as a tarball on each GitHub Release.
+`.github/workflows/release-companion.yml` builds, checks and packs it, attaches the `.tgz` to a
+Release for the tag, then publishes the same tarball to npm with provenance.
+
+One-time setup:
+
+1. An npm account that owns the `eliraz-refael` scope (the npm username `eliraz-refael`, or an
+   organization of that name), with two-factor authentication on.
+2. An npm **granular access token** (npmjs.com → Access Tokens → Generate New Token → Granular)
+   with read and write access to `@eliraz-refael/wherefore` (before the first publish, to the
+   `@eliraz-refael` scope's packages) and "bypass two-factor authentication" allowed, or a classic
+   **Automation** token. Save it as the repository secret `NPM_TOKEN` (GitHub → Settings → Secrets
+   and variables → Actions). Later, npm's trusted publishing for this workflow can replace the
+   token.
+
+Each release:
+
+1. Bump the version in `package.json` and `src/version.ts` (a test keeps them equal), and merge.
+2. Tag the merge commit and push the tag: `git tag companion-v0.1.1 && git push origin companion-v0.1.1`.
+
+The workflow fails if the tag isn't `companion-v<package.json's version>`. A version with a
+prerelease part (`0.2.0-rc.1`) is published under npm's `next` tag and marked as a prerelease. A
+manual run (Actions → Release companion → Run workflow) is a dry run unless you untick it, and only
+releases from a `companion-v…` tag. To try the tarball locally: `pnpm -C packages/companion pack`
+(pnpm, not npm: it rewrites the `workspace:*` devDependency), then
+`npm install -g --prefix /tmp/wf ./eliraz-refael-wherefore-<version>.tgz`.
