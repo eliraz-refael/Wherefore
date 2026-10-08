@@ -26,7 +26,9 @@ const TabIds = Schema.Array(TabId).check(Schema.isMinLength(1))
 
 const isCalendarDate = (value: string): boolean => {
   const [year = 0, month = 0, day = 0] = value.split("-").map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day))
+  // setUTCFullYear, not Date.UTC: Date.UTC reads years 0-99 as 1900-1999.
+  const date = new Date(0)
+  date.setUTCFullYear(year, month - 1, day)
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 

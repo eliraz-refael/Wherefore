@@ -78,6 +78,13 @@ describe("SubmittedIntention", () => {
     expect(rejects(SubmittedIntention, { ...wireIntention, due: { date: "2026-10-12", kind: "due" } })).toBe(true)
   })
 
+  it("accepts calendar dates in any year, 0 to 99 too (not read as 19xx)", () => {
+    const due = (date: string) => ({ ...wireIntention, due: { date, kind: "event", source: "x" } })
+    expect(rejects(SubmittedIntention, due("0050-03-01"))).toBe(false)
+    expect(rejects(SubmittedIntention, due("0000-02-29"))).toBe(false) // year 0 is a leap year
+    expect(rejects(SubmittedIntention, due("0001-02-29"))).toBe(true)
+  })
+
   it("rejects bad input", () => {
     expect(rejects(SubmittedIntention, { ...wireIntention, tab_ids: [] })).toBe(true)
     expect(rejects(SubmittedIntention, { ...wireIntention, tab_ids: [-3] })).toBe(true)

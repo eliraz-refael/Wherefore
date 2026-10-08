@@ -6,6 +6,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import {
   ExtensionUnavailable,
+  localDay,
   MessageTooLarge,
   type ProfileId,
   type Question,
@@ -46,6 +47,8 @@ interface FakeOptions {
   readonly beforeUpdate?: (run: Run) => Effect.Effect<void, unknown>
   readonly readPages?: (tabIds: ReadonlyArray<number>) => Effect.Effect<unknown, unknown>
   readonly askPanel?: (questions: ReadonlyArray<Question>) => Effect.Effect<unknown, unknown>
+  /** `list_tabs`'s answer; `undefined` (the default) lists the profile's two tabs. */
+  readonly listTabs?: () => Effect.Effect<unknown, unknown> | undefined
 }
 
 class FakeProfile {
@@ -57,7 +60,8 @@ class FakeProfile {
   constructor(readonly profileId: ProfileId, readonly options: FakeOptions = {}) {
     const self = this
     const handlers: Record<string, (payload: any) => Effect.Effect<unknown, unknown>> = {
-      list_tabs: () => Effect.succeed({ tabs: tabsOf(profileId === WORK ? "work" : "home"), today: "2026-10-08 (Thu)" }),
+      list_tabs: () =>
+        options.listTabs?.() ?? Effect.succeed({ tabs: tabsOf(profileId === WORK ? "work" : "home"), today: "2026-10-08 (Thu)" }),
       read_pages: ({ tabIds }) => options.readPages?.(tabIds) ?? Effect.succeed({ pages: tabIds.map(page) }),
       ask_panel: ({ questions }) => options.askPanel?.(questions) ?? Effect.never,
       update_run: ({ run }: { run: Run }) =>
@@ -202,6 +206,25 @@ describe("MCP session", () => {
       const alone = yield* makeSession({ brokers: brokersOf([home]) })
       const refused = yield* alone.listTabs(ctx).pipe(Effect.exit)
       expect(failure(refused).message).toBe(runActiveMessage("api"))
+    }))
+
+  it.effect("list_tabs lists no tabs, with this machine's day, when the profiles it asked left but others still take part", () =>
+    Effect.gen(function*() {
+      const now = Date.parse("2026-10-08T12:00:00.000Z")
+      yield* TestClock.setTime(now)
+      let workLists = 0
+      // Work's Chrome closes during the second list.
+      const work = new FakeProfile(WORK, {
+        listTabs: () => workLists++ === 0 ? undefined : Effect.fail(new ExtensionUnavailable({ message: "port closed" }))
+      })
+      const home = new FakeProfile(HOME)
+      const live = [work, home]
+      const session = yield* makeSession({ brokers: brokersOf(live) })
+      yield* session.listTabs(ctx)
+      // Home's broker is gone from the registry, but its run still takes part in the triage.
+      live.splice(1, 1)
+      const listed = yield* session.listTabs(ctx)
+      expect(listed).toEqual({ tabs: [], today: localDay(now) })
     }))
 
   it.effect("a stop that lands while a call is ending (here: cancelled) is told to the next call", () =>

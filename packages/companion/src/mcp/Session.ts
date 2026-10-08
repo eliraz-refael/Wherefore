@@ -31,6 +31,7 @@ import {
   emptyUsage,
   type Intention,
   IntentionId,
+  localDay,
   type PageRead,
   type ProfileId,
   type Question,
@@ -47,7 +48,7 @@ import {
   UNKNOWN_MODEL
 } from "@wherefore/core"
 import { randomUUID } from "node:crypto"
-import { Cause, DateTime, Deferred, Duration, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
+import { Cause, Clock, DateTime, Deferred, Duration, Effect, Exit, type Option, Result, Scope, Semaphore, Stream } from "effect"
 import type { Broker, Brokers } from "./Brokers.ts"
 import { SessionIds } from "./ids.ts"
 
@@ -477,8 +478,10 @@ export const makeSession = (options: SessionOptions): Effect.Effect<Session, nev
               for (const tab of result.success.tabs) tabs.push(ids.snapshot(part.profile, tab))
               today ??= result.success.today
             }
-            if (current.runs.size === 0 || today === undefined) return yield* new ToolError({ message: NO_BROKERS })
-            return skipped.size === 0 ? { tabs, today } : { tabs, today, notice: skippedNotice(skipped) }
+            if (current.runs.size === 0) return yield* new ToolError({ message: NO_BROKERS })
+            // No profile listed (every one left meanwhile): this machine's day is the user's too.
+            const day = today ?? localDay(yield* Clock.currentTimeMillis)
+            return skipped.size === 0 ? { tabs, today: day } : { tabs, today: day, notice: skippedNotice(skipped) }
           })
         )
       })
