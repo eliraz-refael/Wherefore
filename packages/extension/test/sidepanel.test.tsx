@@ -15,6 +15,7 @@ import {
 } from "@wherefore/core"
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react"
 import { type Cause, Effect, Exit, Queue, Schema, Scope, Stream } from "effect"
+import { localToday, parseCalendarDate, shortDate } from "../src/ui/dates.ts"
 import { FakeChrome } from "./fakes/chrome.ts"
 import { callTools, ScriptedModel, toolCall, toolResults, type Turn } from "./fakes/model.ts"
 import { brokerClient, fakeAgentBroker, FakeNativeHost } from "./fakes/native.ts"
@@ -107,7 +108,7 @@ const listChrome = () =>
 const rowTitles = (scope: { readonly getAllByRole: (role: "article") => Array<HTMLElement> }) =>
   scope.getAllByRole("article").map((card) => card.querySelector(".wf-list-title")?.textContent)
 const queryRowTitles = (view: ReturnType<Panels["open"]>) =>
-  view.ui.queryAllByRole("article").map((card) => card.querySelector(".wf-list-title")?.textContent)
+  view.ui.queryAllByRole("article").map((card: HTMLElement) => card.querySelector(".wf-list-title")?.textContent)
 const headings = (view: ReturnType<Panels["open"]>) =>
   view.ui.getAllByRole("heading", { level: 2 }).map((heading: HTMLElement) => heading.textContent)
 
@@ -365,6 +366,213 @@ describe("Your list", () => {
     fireEvent.click(view.ui.getByRole("button", { name: "Save" }))
     await waitFor(() => expect(storedData(chrome, "items").find((item: any) => item.id === "e").task).toBe("Pick a standing desk"))
     await waitFor(() => expect(document.activeElement?.getAttribute("data-item-toggle")).toBe("e"))
+  })
+
+  const search = (view: ReturnType<Panels["open"]>, query: string) =>
+    fireEvent.change(view.ui.getByRole("searchbox", { name: "Search your list" }), { target: { value: query } })
+
+  it("search matches every word, in any case, across titles, tasks, notes, tab titles and sites", async () => {
+    const chrome = new FakeChrome({
+      local: {
+        settings: SETTINGS,
+        items: itemsEnvelope([
+          storedItem({ id: "a", title: "Auth PR #412", task: "Finish the review", tabs: [{ title: "Auth PR", url: "https://github.com/acme/api/pull/412" }] }),
+          storedItem({ id: "b", task: "Pick a desk", why: "Comparing standing desks", tabs: [{ title: "Desk", url: "https://shop.example/desk" }] }),
+          storedItem({ id: "c", task: "Chrome API reference", tag: "keep", tabs: [{ title: "tabs API", url: "https://developer.chrome.com/docs" }] })
+        ])
+      }
+    })
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+    const input = await view.ui.findByLabelText("Search your list")
+    expect(input.getAttribute("placeholder")).toBe("Search tasks, tabs, sites")
+
+    search(view, "review")
+    expect(rowTitles(view.ui)).toEqual(["Auth PR #412"])
+    // A note (the why) and a site, together and in any case.
+    search(view, "  STANDING   shop.example ")
+    expect(rowTitles(view.ui)).toEqual(["Pick a desk"])
+    // A tab title and a title.
+    search(view, "tabs chrome")
+    expect(rowTitles(view.ui)).toEqual(["Chrome API reference"])
+    // Every word must match somewhere.
+    search(view, "desk github")
+    expect(queryRowTitles(view)).toEqual([])
+    expect(view.ui.getByText("Nothing matches “desk github”. Search looks at tasks, notes, tab titles and sites.")).toBeTruthy()
+    expect(view.ui.queryByRole("heading", { level: 2 })).toBeNull()
+
+    search(view, "")
+    expect(rowTitles(view.ui)).toHaveLength(3)
+    expect(view.ui.queryByText(/^Nothing matches/)).toBeNull()
+  })
+
+  it("filter chips: All and each tag that has items, with counts, one at a time, with search", async () => {
+    const app = make(listChrome())
+    await app.start()
+    const view = app.open()
+    await view.ui.findByRole("heading", { level: 1, name: "5 things you meant to do" })
+
+    const chips = within(view.ui.getByRole("group", { name: "Show" })).getAllByRole("button")
+    expect(chips.map((chip) => chip.textContent)).toEqual(["All 5", "Do 2", "Track 1", "Read 1", "Keep 1"])
+    const pressed = () => chips.filter((chip) => chip.getAttribute("aria-pressed") === "true").map((chip) => chip.textContent)
+    expect(pressed()).toEqual(["All 5"])
+
+    fireEvent.click(view.ui.getByRole("button", { name: "Do 2" }))
+    expect(pressed()).toEqual(["Do 2"])
+    expect(rowTitles(view.ui)).toEqual(["Finish the auth PR", "Pick a desk"])
+    search(view, "desk")
+    expect(rowTitles(view.ui)).toEqual(["Pick a desk"])
+    fireEvent.click(view.ui.getByRole("button", { name: "Read 1" }))
+    expect(pressed()).toEqual(["Read 1"])
+    expect(queryRowTitles(view)).toEqual([])
+    expect(view.ui.getByText(/^Nothing matches “desk”/)).toBeTruthy()
+    search(view, "")
+    expect(rowTitles(view.ui)).toEqual(["Read the Effect guide"])
+
+    // When its last item is done, the chip goes and the whole list shows again; focus goes to the
+    // title, as there is no next item in view.
+    fireEvent.click(view.ui.getByRole("button", { name: "Mark done: Read the Effect guide" }))
+    await waitFor(() => expect(view.ui.queryByRole("button", { name: "Read 1" })).toBeNull())
+    expect(view.ui.getByRole("button", { name: "All 4" }).getAttribute("aria-pressed")).toBe("true")
+    expect(rowTitles(view.ui)).toHaveLength(4)
+    await waitFor(() => expect(document.activeElement?.hasAttribute("data-screen-heading")).toBe(true))
+  })
+
+  /** A day `offset` days from today, as YYYY-MM-DD in the user's zone. */
+  const dayFromToday = (offset: number): string => {
+    const now = new Date()
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
+    return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`
+  }
+  /** "Mon 12 Oct" for a day `offset` days from today (test/dates.test.ts tests the wording). */
+  const dayText = (offset: number): string => shortDate(parseCalendarDate(dayFromToday(offset))!, localToday(Date.now()))
+
+  const datesChrome = () =>
+    new FakeChrome({
+      local: {
+        settings: SETTINGS,
+        items: itemsEnvelope([
+          storedItem({ id: "notes", task: "Effect notes", tag: "read", tabs: [{ title: "Notes", url: "https://effect.website/" }] }),
+          storedItem({
+            id: "school",
+            task: "School registration",
+            due: { date: dayFromToday(5), kind: "due", source: "Sign-up closes in five days." },
+            tabs: [
+              { title: "Registration", url: "https://school.example/register" },
+              { title: "Bills", url: "https://school.example/bills" },
+              { title: "Map", url: "https://maps.example/school" },
+              { title: "Uniform", url: "https://uniform.example/" }
+            ]
+          }),
+          storedItem({ id: "pr", task: "PR #12", tabs: [{ title: "PR", url: "https://github.com/acme/api/pull/12" }] }),
+          storedItem({
+            id: "tickets",
+            task: "Eventer tickets",
+            tag: "decide",
+            due: { date: dayFromToday(1), kind: "event", source: "  " },
+            tabs: [{ title: "Tickets", url: "https://tickets.example/" }]
+          }),
+          storedItem({ id: "repo", task: "Watch the repo", tag: "track", tabs: [{ title: "Repo", url: "https://github.com/acme/repo" }] }),
+          storedItem({
+            id: "tax",
+            task: "Tax form",
+            due: { date: dayFromToday(-2), kind: "due", source: "Due two days ago." },
+            tabs: [{ title: "Tax", url: "https://tax.example/" }]
+          })
+        ])
+      }
+    })
+
+  it("Coming up holds dated items, soonest first (overdue first); Anytime the rest, by tag", async () => {
+    const app = make(datesChrome())
+    await app.start()
+    const view = app.open()
+    await view.ui.findByRole("heading", { level: 1, name: "6 things you meant to do" })
+
+    expect(headings(view)).toEqual(["Coming up", "Anytime"])
+    expect(rowTitles(within(view.ui.getByRole("region", { name: "Coming up" })))).toEqual([
+      "Tax form",
+      "Eventer tickets",
+      "School registration"
+    ])
+    expect(rowTitles(within(view.ui.getByRole("region", { name: "Anytime" })))).toEqual(["PR #12", "Watch the repo", "Effect notes"])
+
+    // The row's meta: tab count and two sites, then the date pill.
+    const school = view.ui.getByRole("article", { name: "School registration" })
+    expect(within(school).getByText("4 tabs · school.example, maps.example")).toBeTruthy()
+
+    // A filter can empty a section, which then goes.
+    fireEvent.click(view.ui.getByRole("button", { name: "Track 1" }))
+    expect(headings(view)).toEqual(["Anytime"])
+    fireEvent.click(view.ui.getByRole("button", { name: "Decide 1" }))
+    expect(headings(view)).toEqual(["Coming up"])
+  })
+
+  it("date pills: overdue and within 3 days are warm; later dates are plain", async () => {
+    const app = make(datesChrome())
+    await app.start()
+    const view = app.open()
+    await view.ui.findByRole("heading", { level: 1, name: "6 things you meant to do" })
+    const pill = (title: string) => view.ui.getByRole("article", { name: title }).querySelector(".wf-date-pill")
+
+    expect(pill("Tax form")?.textContent).toBe(`Overdue · ${dayText(-2)}`)
+    expect(pill("Tax form")?.classList.contains("wf-date-soon")).toBe(true)
+    expect(pill("Eventer tickets")?.textContent).toBe(dayText(1))
+    expect(pill("Eventer tickets")?.classList.contains("wf-date-soon")).toBe(true)
+    expect(pill("School registration")?.textContent).toBe(dayText(5))
+    expect(pill("School registration")?.classList.contains("wf-date-soon")).toBe(false)
+    expect(pill("PR #12")).toBeNull()
+    // The toggle's description carries the tag, sites and date for screen readers.
+    expect(view.ui.getByRole("button", { name: "Tax form" }).getAttribute("aria-describedby")).toBe("item-tax-tag item-tax-meta")
+  })
+
+  it("the expanded item says when, in words, and where the date came from (no line when it doesn't say)", async () => {
+    const app = make(datesChrome())
+    await app.start()
+    const view = app.open()
+
+    fireEvent.click(await view.ui.findByRole("button", { name: "School registration" }))
+    const school = within(view.ui.getByRole("article", { name: "School registration" }))
+    expect(school.getByText(`Due ${dayText(5)}, in 5 days`)).toBeTruthy()
+    expect(school.getByText("Sign-up closes in five days.")).toBeTruthy()
+    expect(school.getByRole("button", { name: "Open all 4" })).toBeTruthy()
+
+    fireEvent.click(view.ui.getByRole("button", { name: "Eventer tickets" }))
+    const tickets = view.ui.getByRole("article", { name: "Eventer tickets" })
+    expect(within(tickets).getByText(`Event on ${dayText(1)}, tomorrow`)).toBeTruthy()
+    expect(tickets.querySelector(".wf-datebox-source")).toBeNull()
+    expect(within(tickets).getByRole("button", { name: "Open" })).toBeTruthy()
+
+    fireEvent.click(view.ui.getByRole("button", { name: "Tax form" }))
+    expect(within(view.ui.getByRole("article", { name: "Tax form" })).getByText(`Due ${dayText(-2)}, 2 days ago`)).toBeTruthy()
+  })
+
+  it("renders what the model wrote as text, never as markup", async () => {
+    const markup = "<img src=x onerror=alert(1)>"
+    const chrome = new FakeChrome({
+      local: {
+        settings: SETTINGS,
+        items: itemsEnvelope([
+          storedItem({
+            id: "x",
+            title: `T ${markup}`,
+            task: `Next ${markup}`,
+            why: `Why ${markup}`,
+            due: { date: dayFromToday(2), kind: "due", source: `Source ${markup}` },
+            tabs: [{ title: "Page", url: "https://page.example/" }]
+          })
+        ])
+      }
+    })
+    const app = make(chrome)
+    await app.start()
+    const view = app.open()
+    fireEvent.click(await view.ui.findByRole("button", { name: `T ${markup}` }))
+    expect(view.ui.getByText(`Next ${markup}`)).toBeTruthy()
+    expect(view.ui.getByText(`Why ${markup}`)).toBeTruthy()
+    expect(view.ui.getByText(`Source ${markup}`)).toBeTruthy()
+    expect(view.container.querySelector("img")).toBeNull()
   })
 })
 

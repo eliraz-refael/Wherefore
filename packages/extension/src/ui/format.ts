@@ -10,8 +10,8 @@ export const plural = (n: number, one: string, many = `${one}s`): string => `${n
 export const tabCount = (n: number): string => plural(n, "tab")
 
 /**
- * The sections the list (and the Tidy up results) group items into, in order. Until the list
- * shows each item's tag, do and decide share "To do".
+ * The sections the Tidy up results group items into, in order; do and decide share "To do". (Your
+ * list has its own: see list.ts.)
  */
 export type ListSection = "todo" | "follow_up" | "read" | "keep"
 
