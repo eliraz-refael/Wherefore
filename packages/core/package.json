@@ -18,7 +18,7 @@
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.116",
     "typescript": "7.0.2",
-    "vite": "8.3.0",
+    "vite": "8.3.3",
     "vitest": "5.0.1"
   }
 }
