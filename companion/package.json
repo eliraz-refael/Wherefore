@@ -14,7 +14,7 @@
     "@agentclientprotocol/sdk": "^1.4.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "ws": "^8.21.3",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
